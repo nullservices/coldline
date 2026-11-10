@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coldline</title>
+<style>
+  :root{--bg:#0e1114;--panel:rgba(14,17,20,.86);--line:rgba(255,255,255,.12);--ink:#e9e6dc;--dim:#9a9a8e;
+    --amber:#f0a83a;--red:#e2584a;--blue:#4f95e6;--green:#7fc96b}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);
+    font:15px/1.4 "Bahnschrift","DIN Alternate","Roboto Condensed","Arial Narrow",system-ui,sans-serif;
+    -webkit-user-select:none;user-select:none}
+  canvas#c{position:fixed;inset:0;width:100%;height:100%;display:block}
+  button,input,select{font:inherit;color:inherit}
+  button{background:rgba(255,255,255,.07);border:1px solid var(--line);border-radius:4px;padding:9px 14px;cursor:pointer;
+    letter-spacing:.06em;text-transform:uppercase}
+  button:hover{background:rgba(255,255,255,.15)}
+  button.pri{background:var(--amber);color:#1b1305;border-color:transparent;font-weight:700}
+  button.pri:hover{filter:brightness(1.1)}
+  button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline-offset:1px}
+  input,select{background:rgba(0,0,0,.4);border:1px solid var(--line);border-radius:4px;padding:9px 10px;width:100%;-webkit-user-select:text;user-select:text}
+  label{display:block;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin:12px 0 4px}
+  .overlay{position:fixed;inset:0;display:none;place-items:center;background:radial-gradient(ellipse at center,rgba(8,10,12,.55),rgba(8,10,12,.9));z-index:20;padding:16px;overflow:auto}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:24px 26px;width:min(760px,100%);backdrop-filter:blur(8px)}
+  h1{margin:0;font-size:44px;letter-spacing:.22em;font-weight:700}
+  h1 span{color:var(--amber)}
+  .tag{color:var(--dim);margin:2px 0 14px;letter-spacing:.08em}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+  @media(max-width:640px){.cols{grid-template-columns:1fr}}
+  h2{margin:0 0 2px;font-size:14px;letter-spacing:.16em;text-transform:uppercase;color:var(--amber)}
+  .modes{display:grid;gap:6px}
+  .modes button{text-align:left;text-transform:none;letter-spacing:0;padding:8px 12px}
+  .modes button b{display:block;letter-spacing:.06em;text-transform:uppercase}
+  .modes button small{color:var(--dim)}
+  .modes button.on{border-color:var(--amber);background:rgba(240,168,58,.14)}
+  #status{min-height:22px;margin-top:14px;color:var(--amber)}
+  .keys{color:var(--dim);font-size:13px;margin-top:14px;line-height:1.7}
+  .keys b{color:var(--ink);font-weight:600}
+  #codeBig{font-size:34px;letter-spacing:.3em;color:var(--amber);font-weight:700;-webkit-user-select:text;user-select:text}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
+
+  #hud{position:fixed;inset:0;pointer-events:none;display:none;z-index:10;text-shadow:0 1px 2px rgba(0,0,0,.8)}
+  #top{position:absolute;top:10px;left:50%;transform:translateX(-50%);text-align:center;background:var(--panel);border:1px solid var(--line);
+    border-radius:4px;padding:5px 16px;min-width:230px}
+  #score{font-size:20px;font-weight:700;letter-spacing:.05em}
+  #sub{font-size:12px;color:var(--dim);letter-spacing:.08em;text-transform:uppercase}
+  #codeChip{position:absolute;top:10px;left:10px;background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:5px 10px;font-size:12px;
+    letter-spacing:.1em;color:var(--dim);text-transform:uppercase}
+  #codeChip b{color:var(--amber);font-size:15px;letter-spacing:.2em}
+  #feed{position:absolute;top:10px;right:10px;text-align:right;font-size:14px}
+  #feed div{background:rgba(14,17,20,.6);padding:2px 8px;margin-bottom:3px;border-radius:3px}
+  #msg{position:absolute;top:22%;left:50%;transform:translateX(-50%);font-size:26px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+    text-align:center;opacity:0;transition:opacity .3s;white-space:nowrap}
+  #obj{position:absolute;top:66px;left:50%;transform:translateX(-50%);font-size:13px;color:var(--ink);letter-spacing:.06em;text-align:center}
+  #cross{position:absolute;left:50%;top:50%;width:26px;height:26px;margin:-13px 0 0 -13px}
+  #cross i{position:absolute;background:#fff;box-shadow:0 0 2px #000}
+  #cross i:nth-child(1){left:12px;top:0;width:2px;height:8px}#cross i:nth-child(2){left:12px;bottom:0;width:2px;height:8px}
+  #cross i:nth-child(3){top:12px;left:0;height:2px;width:8px}#cross i:nth-child(4){top:12px;right:0;height:2px;width:8px}
+  #hit{position:absolute;left:50%;top:50%;width:30px;height:30px;margin:-15px 0 0 -15px;opacity:0;transition:opacity .25s;
+    background:linear-gradient(45deg,transparent 46%,#fff 46%,#fff 54%,transparent 54%),linear-gradient(-45deg,transparent 46%,#fff 46%,#fff 54%,transparent 54%)}
+  #hit.hs{filter:drop-shadow(0 0 3px var(--red)) hue-rotate(0)}
+  #bl{position:absolute;left:18px;bottom:16px}
+  #hp{font-size:44px;font-weight:700;line-height:1}
+  #hp small{font-size:13px;color:var(--dim);letter-spacing:.1em;margin-left:6px}
+  #hpbar{width:180px;height:5px;background:rgba(255,255,255,.18);margin-top:6px}#hpbar i{display:block;height:100%;background:var(--green)}
+  #br{position:absolute;right:18px;bottom:16px;text-align:right}
+  #ammo{font-size:44px;font-weight:700;line-height:1}#ammo small{font-size:20px;color:var(--dim)}
+  #wname{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-top:4px}
+  #wlist{font-size:12px;color:var(--dim);margin-top:4px;letter-spacing:.06em}#wlist b{color:var(--amber)}
+  #dmg{position:absolute;inset:0;box-shadow:inset 0 0 160px 40px rgba(200,20,10,.75);opacity:0;transition:opacity .4s}
+  #scope{position:absolute;inset:0;display:none;background:radial-gradient(circle at center,transparent 0,transparent 33vh,#000 33.4vh)}
+  #scope::before,#scope::after{content:"";position:absolute;background:#000}
+  #scope::before{left:50%;top:0;bottom:0;width:1px}#scope::after{top:50%;left:0;right:0;height:1px}
+  #dead{position:absolute;bottom:26%;left:50%;transform:translateX(-50%);text-align:center;font-size:18px;letter-spacing:.08em;display:none}
+  #board{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:var(--panel);border:1px solid var(--line);border-radius:6px;
+    padding:14px 18px;min-width:min(560px,92vw);display:none;text-shadow:none}
+  #board table{width:100%;border-collapse:collapse}
+  #board th{font-size:11px;letter-spacing:.12em;color:var(--dim);text-align:left;font-weight:500;padding:3px 8px;text-transform:uppercase}
+  #board td{padding:3px 8px;border-top:1px solid var(--line)}
+  #board td.n,#board th.n{text-align:right;font-variant-numeric:tabular-nums}
+  #board tr.me td{color:var(--amber)}
+  .t1{color:var(--red)}.t2{color:var(--blue)}.t0{color:var(--ink)}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hud">
+  <div id="codeChip">Invite code <b id="codeTxt"></b></div>
+  <div id="top"><div id="score"></div><div id="sub"></div></div>
+  <div id="obj"></div>
+  <div id="feed"></div>
+  <div id="msg"></div>
+  <div id="cross"><i></i><i></i><i></i><i></i></div>
+  <div id="hit"></div>
+  <div id="scope"></div>
+  <div id="dmg"></div>
+  <div id="dead"></div>
+  <div id="bl"><div id="hp">100<small>HEALTH</small></div><div id="hpbar"><i></i></div></div>
+  <div id="br"><div id="ammo">30<small> / 120</small></div><div id="wname"></div><div id="wlist"></div></div>
+  <div id="board"></div>
+</div>
+
+<div id="menu" class="overlay" style="display:grid">
+  <div class="card">
+    <h1>COLD<span>LINE</span></h1>
+    <div class="tag">Team shooter in your browser — host a match, share the code.</div>
+    <label for="name">Call sign</label>
+    <input id="name" maxlength="14" placeholder="Your name" autocomplete="off">
+    <div class="cols" style="margin-top:16px">
+      <div>
+        <h2>Host a match</h2>
+        <label>Mode</label>
+        <div class="modes" id="modes">
+          <button data-m="dm" class="on"><b>Deathmatch</b><small>Everyone for themselves. First to 20.</small></button>
+          <button data-m="ctf"><b>Capture the Flag</b><small>Steal their flag, bring it home. First to 5.</small></button>
+          <button data-m="inf"><b>Infiltration</b><small>One life per round. Blue steals the case, Red defends.</small></button>
+        </div>
+        <label for="bots">Bots</label>
+        <select id="bots"><option>0</option><option>2</option><option selected>4</option><option>6</option><option>8</option></select>
+        <div class="row"><button class="pri" id="createBtn">Create match</button></div>
+      </div>
+      <div>
+        <h2>Join a match</h2>
+        <label for="code">Invite code</label>
+        <input id="code" maxlength="5" placeholder="e.g. K7M2Q" autocomplete="off" style="text-transform:uppercase;letter-spacing:.3em">
+        <div class="row"><button class="pri" id="joinBtn">Join</button></div>
+        <div class="keys"><b>WASD</b> move · <b>Space</b> jump · <b>C</b> crouch · <b>Shift</b> walk<br>
+          <b>Q / E</b> lean · <b>Mouse</b> fire · <b>Right mouse</b> aim / scope<br>
+          <b>1–5</b> or wheel weapons · <b>R</b> reload · <b>Tab</b> scores · <b>Esc</b> menu</div>
+      </div>
+    </div>
+    <div id="status"></div>
+  </div>
+</div>
+
+<div id="pause" class="overlay">
+  <div class="card" style="width:min(460px,100%)">
+    <h2>Invite code</h2>
+    <div id="codeBig"></div>
+    <div class="row"><button id="copyBtn">Copy invite link</button><span id="copied" style="color:var(--green)"></span></div>
+    <label for="sens">Mouse sensitivity</label>
+    <input id="sens" type="range" min="0.3" max="3" step="0.05" value="1" style="padding:0">
+    <label for="gfx">Graphics</label>
+    <select id="gfx"><option value="high">High — shadows, bloom</option><option value="low">Low — faster</option></select>
+    <div class="row" style="margin-top:18px">
+      <button class="pri" id="resumeBtn">Play</button>
+      <button id="teamBtn">Switch team</button>
+      <button id="leaveBtn">Leave</button>
+    </div>
+  </div>
+</div>
+
+<script>/*__GAME__*/</script>
+</body>
+</html>
