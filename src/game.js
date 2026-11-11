@@ -5,6 +5,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import * as M from './map.js';
 
 /* =====================================================================
    COLDLINE — browser team shooter. One player hosts (their browser runs
@@ -17,65 +18,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const r2 = (v) => Math.round(v * 100) / 100;
 
 /* ------------------------------ map ------------------------------ */
-const TOP = [
-  '#################################',
-  '#S.S.S.#....c.......c.....#.....#',
-  '#......#..................#..D..#',
-  '#..F........CC....l.............#',
-  '#......#..........l.......##.####',
-  '#S.S.S.#....c.........c.........#',
-  '####.###.........###.......c....#',
-  '#...........c....#.#....l.......#',
-  '#..D...l.........#......l..CC...#',
-  '#......l....##.......#..........#',
-  '#..CC.......#....c...#....####.##',
-  '#...........#........#..........#',
-  '####..####..#..ll....####....D..#',
-  '#.........................c.....#',
-  '#...c....l.....C...C.......l....#',
-];
-const ROWS = TOP.concat(TOP.slice().reverse().map((r) => [...r].reverse().join('')));
-const MW = 33, MH = ROWS.length, CS = 2.5;
-ROWS.forEach((r, i) => { if (r.length !== MW) throw new Error('map row ' + i + ' has length ' + r.length); });
-const HGT = { '#': 5, C: 2.4, c: 1.2, l: 1.0 };
-const hgt = new Float32Array(MW * MH);
-const cellX = (cx) => (cx - MW / 2 + 0.5) * CS, cellZ = (cz) => (cz - MH / 2 + 0.5) * CS;
-const toCx = (x) => Math.floor(x / CS + MW / 2), toCz = (z) => Math.floor(z / CS + MH / 2);
-const SPAWNS = { 1: [], 2: [], all: [] }, BASE = {};
-for (let z = 0; z < MH; z++) for (let x = 0; x < MW; x++) {
-  const ch = ROWS[z][x], team = z < MH / 2 ? 1 : 2, p = { x: cellX(x), z: cellZ(z) };
-  hgt[z * MW + x] = HGT[ch] || 0;
-  if (ch === 'S') { SPAWNS[team].push(p); SPAWNS.all.push(p); }
-  if (ch === 'D') SPAWNS.all.push(p);
-  if (ch === 'F') BASE[team] = p;
-}
-function hAt(x, z) { const cx = toCx(x), cz = toCz(z); return cx < 0 || cz < 0 || cx >= MW || cz >= MH ? 99 : hgt[cz * MW + cx]; }
-function rayMap(ox, oy, oz, dx, dy, dz, max, step = 0.12) {
-  for (let t = 0.1; t < max; t += step) { const y = oy + dy * t; if (y < 0) return t; if (y < 5.2 && hAt(ox + dx * t, oz + dz * t) > y) return t; }
-  return max;
-}
-function los(ax, ay, az, bx, by, bz) {
-  const dx = bx - ax, dy = by - ay, dz = bz - az, d = Math.hypot(dx, dy, dz);
-  return d < 0.5 || rayMap(ax, ay, az, dx / d, dy / d, dz / d, d, 0.35) >= d;
-}
-function bfs(sx, sz, gx, gz) {
-  if (gx < 0 || gz < 0 || gx >= MW || gz >= MH || hgt[gz * MW + gx] > 0) return null;
-  const prev = new Int32Array(MW * MH).fill(-2), s = sz * MW + sx, g = gz * MW + gx, q = [s]; prev[s] = -1;
-  for (let i = 0; i < q.length; i++) {
-    const c = q[i]; if (c === g) break;
-    const cx = c % MW, cz = (c / MW) | 0;
-    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
-      if (!dx && !dz) continue;
-      const nx = cx + dx, nz = cz + dz; if (nx < 0 || nz < 0 || nx >= MW || nz >= MH) continue;
-      const n = nz * MW + nx; if (prev[n] !== -2 || hgt[n] > 0) continue;
-      if (dx && dz && (hgt[cz * MW + nx] > 0 || hgt[nz * MW + cx] > 0)) continue;
-      prev[n] = c; q.push(n);
-    }
-  }
-  if (prev[g] === -2) return null;
-  const path = []; for (let c = g; c !== s && c >= 0; c = prev[c]) path.push({ x: cellX(c % MW), z: cellZ((c / MW) | 0) });
-  return path.reverse();
-}
+const { MW, MH, CS, SPAWNS, BASE, cellX, cellZ, toCx, toCz, rayMap, los } = M;
 
 /* ---------------------------- weapons ---------------------------- */
 const WPN = [
@@ -168,9 +111,9 @@ const Host = {
       let bs = -1;
       for (const s of pts) { let m = 1e9; for (const o of this.players.values()) if (o.alive && o !== p) m = Math.min(m, Math.hypot(o.x - s.x, o.z - s.z)); m += Math.random() * 8; if (m > bs) { bs = m; best = s; } }
     }
-    p.x = best.x + (Math.random() - 0.5) * 0.8; p.z = best.z + (Math.random() - 0.5) * 0.8; p.y = 0; p.yaw = Math.atan2(p.x, p.z); p.pitch = 0;
+    p.x = best.x + (Math.random() - 0.5) * 0.8; p.z = best.z + (Math.random() - 0.5) * 0.8; p.y = best.y || 0; p.yaw = Math.atan2(p.x, p.z); p.pitch = 0;
     p.hp = 100; p.alive = true; p.ai.path = null; p.ai.target = null;
-    this.all({ t: 'spawn', id: p.id, x: r2(p.x), z: r2(p.z), yaw: r2(p.yaw) });
+    this.all({ t: 'spawn', id: p.id, x: r2(p.x), y: r2(p.y), z: r2(p.z), yaw: r2(p.yaw) });
   },
   setupFlags() {
     const mk = (team, isCase) => ({ team, s: 0, x: BASE[team].x, y: 0, z: BASE[team].z, c: 0, dt: 0, isCase });
@@ -184,7 +127,7 @@ const Host = {
     if (this.scores[team] >= CFG.inf.limit) this.endMatch(TEAM_NAME[team] + ' team wins the match');
     else { this.phase = 'roundend'; this.phaseT = 5; this.say(TEAM_NAME[team] + ' wins the round — ' + why, team); }
   },
-  dropFlags(p) { for (const f of this.flags) if (f.s === 1 && f.c === p.id) { f.s = 2; f.c = 0; f.x = p.x; f.y = p.y; f.z = p.z; f.dt = 25; this.say((f.isCase ? 'The case' : TEAM_NAME[f.team] + ' flag') + ' was dropped'); } },
+  dropFlags(p) { for (const f of this.flags) if (f.s === 1 && f.c === p.id) { f.s = 2; f.c = 0; f.x = p.x; f.y = M.groundAt(p.x, p.z, p.y, 0.3); f.z = p.z; f.dt = 25; this.say((f.isCase ? 'The case' : TEAM_NAME[f.team] + ' flag') + ' was dropped'); } },
   damage(tid, aid, dmg, hs, w) {
     const v = this.players.get(tid), a = this.players.get(aid);
     if (!v || !v.alive || this.phase !== 'live') return;
@@ -270,28 +213,33 @@ const Host = {
         const d = Math.hypot(e.x - b.x, e.z - b.z); if (d >= bd) continue;
         let da = Math.atan2(-(e.x - b.x), -(e.z - b.z)) - b.yaw; da = Math.atan2(Math.sin(da), Math.cos(da));
         if (d > 8 && Math.abs(da) > 1.3) continue;
-        if (los(b.x, 1.5, b.z, e.x, e.y + (e.cr ? 0.8 : 1.2), e.z)) { best = e; bd = d; }
+        if (los(b.x, b.y + 1.5, b.z, e.x, e.y + (e.cr ? 0.8 : 1.2), e.z)) { best = e; bd = d; }
       }
       if (best !== ai.target) { ai.target = best; ai.react = 0.3 + Math.random() * 0.35; ai.burst = 0; }
       ai.goalT -= 0.25;
       if (!ai.path || ai.pi >= ai.path.length || ai.goalT <= 0) {
         const g = this.botGoal(b);
-        ai.path = bfs(clamp(toCx(b.x), 0, MW - 1), clamp(toCz(b.z), 0, MH - 1), toCx(g.x), toCz(g.z)); ai.pi = 0; ai.goalT = 5 + Math.random() * 5;
-        if (!ai.path) { const s = SPAWNS.all[(Math.random() * SPAWNS.all.length) | 0]; ai.path = bfs(clamp(toCx(b.x), 0, MW - 1), clamp(toCz(b.z), 0, MH - 1), toCx(s.x), toCz(s.z)) || []; }
+        ai.path = M.findPath(b.x, b.y, b.z, g.x, g.y, g.z); ai.pi = 0; ai.goalT = 5 + Math.random() * 5;
+        if (!ai.path) { const s = SPAWNS.all[(Math.random() * SPAWNS.all.length) | 0]; ai.path = M.findPath(b.x, b.y, b.z, s.x, s.y, s.z) || []; }
       }
     }
     const tgt = ai.target && ai.target.alive ? ai.target : null;
-    let mvYaw = b.yaw;
+    let mvYaw = b.yaw, climbing = false;
     if (ai.path && ai.pi < ai.path.length) {
       const wp = ai.path[ai.pi], dx = wp.x - b.x, dz = wp.z - b.z, d = Math.hypot(dx, dz), sp = (tgt ? 2.4 : 4.6) * dt;
-      if (d <= Math.max(sp, 0.25)) ai.pi++; else { b.x += dx / d * sp; b.z += dz / d * sp; mvYaw = Math.atan2(-dx, -dz); }
+      if (d <= Math.max(sp, 0.25)) { if (wp.y > b.y + 0.6 && !wp.stair) { climbing = true; b.y = Math.min(wp.y, b.y + 3.2 * dt); } else ai.pi++; }
+      else { b.x += dx / d * sp; b.z += dz / d * sp; mvYaw = Math.atan2(-dx, -dz); }
     }
     const want = tgt ? Math.atan2(-(tgt.x - b.x), -(tgt.z - b.z)) : mvYaw;
     let da = want - b.yaw; da = Math.atan2(Math.sin(da), Math.cos(da)); b.yaw += da * Math.min(1, dt * 9);
-    b.y = 0; b.cr = false;
+    if (!climbing) { // bots step/hop up to 1.45 and otherwise fall — unless heading to a waypoint at this height (stepping off a ladder top)
+      const g = M.groundAt(b.x, b.z, b.y, 0.25, 1.45), wp = ai.path && ai.path[ai.pi];
+      if (g >= b.y) b.y = g; else if (!(wp && Math.abs(wp.y - b.y) < 0.6 && wp.y > g + 0.5)) b.y = Math.max(g, b.y - 9 * dt);
+    }
+    b.cr = false;
     if (tgt) {
       const d = Math.hypot(tgt.x - b.x, tgt.z - b.z), ty = tgt.y + (tgt.cr ? 0.75 : 1.15);
-      b.pitch = Math.atan2(ty - 1.5, d);
+      b.pitch = Math.atan2(ty - (b.y + 1.5), d);
       ai.react -= dt;
       if (ai.react <= 0 && this.clock >= ai.next) {
         ai.next = this.clock + 0.12; if (++ai.burst >= 4 + ((Math.random() * 3) | 0)) { ai.burst = 0; ai.next = this.clock + 0.45 + Math.random() * 0.6; }
@@ -403,7 +351,17 @@ const T = {
     const n = fbm(u * 6, v * 6), fine = hash2((u * 512) | 0, (v * 512) | 0), seam = Math.min(Math.abs(((v * 4) % 1) - 0.5), Math.abs(((u * 2) % 1) - 0.5)) > 0.485 ? 0.55 : 1;
     const stain = Math.pow(fbm(u * 2.2 + 9, v * 5), 3) * 0.5, k = (0.62 + n * 0.34 + fine * 0.06 - stain) * seam;
     return [...shade([128, 124, 116], k), n * 0.6 + fine * 0.25 + (seam < 1 ? -1.2 : 0)];
-  }, 3, [1, 2]),
+  }, 3),
+  brick: makeTex(512, (u, v) => {
+    const rows = 8, cols = 4, r = Math.floor(v * rows), off = (r % 2) * 0.5, bu = (u * cols + off) % 1, bv = (v * rows) % 1;
+    const mortar = bu < 0.07 || bv < 0.14, id = hash2(Math.floor(u * cols + off), r), n = fbm(u * 9, v * 9), fine = hash2((u * 512) | 0, (v * 512) | 0);
+    const base = mortar ? [152, 144, 132] : [118 + id * 52, 64 + id * 28, 50 + id * 18], k = 0.72 + n * 0.3 + (mortar ? 0 : fine * 0.12);
+    return [...shade(base, k), mortar ? -1 : n * 0.5 + fine * 0.2];
+  }, 3),
+  grate: makeTex(256, (u, v) => {
+    const gx = (u * 8) % 1, gy = (v * 8) % 1, bar = gx < 0.2 || gy < 0.2, n = fbm(u * 6, v * 6), k = bar ? 0.55 + n * 0.3 : 0.1;
+    return [...shade([112, 114, 118], k), bar ? 1 : -2];
+  }, 2.5),
   floor: makeTex(1024, (u, v) => {
     const n = fbm(u * 14, v * 14), fine = hash2((u * 1024) | 0, (v * 1024) | 0), crack = 1;
     const gx = (u * 4) % 1, gy = (v * 4) % 1, joint = gx < 0.006 || gy < 0.006 ? 0.6 : 1, oil = Math.pow(fbm(u * 3 + 20, v * 3 + 7), 4) * 0.55;
@@ -415,10 +373,11 @@ const T = {
     const grain = fbm(u * 3, v * 40) * 0.35 + fbm(u * 30, v * 30) * 0.1, k = 0.6 + grain - (plank && !edge ? 0.3 : 0) + (edge || diag ? 0.08 : 0);
     return [...shade(edge || diag ? [150, 112, 66] : [176, 134, 80], k), (edge || diag ? 1 : 0.4) + grain * 0.5 - (plank ? 0.6 : 0)];
   }, 4),
-  container: makeTex(256, (u, v) => {
-    const rib = Math.sin(u * Math.PI * 2 * 12), rust = Math.pow(fbm(u * 5, v * 8 + 4), 3.2), band = v < 0.06 || v > 0.94;
-    const k = 0.78 + rib * 0.1 - rust * 0.25, c = rust > 0.25 ? [150, 92, 60] : [255, 255, 255];
-    return [...shade(c, band ? k * 0.8 : k), band ? 1.2 : rib * 0.6 - rust * 0.3];
+  container: makeTex(512, (u, v) => {
+    const rib = Math.sin(u * Math.PI * 2 * 14), band = v < 0.05 || v > 0.95, n = fbm(u * 18, v * 22 + 4);
+    const drip = Math.pow(fbm(u * 40, v * 3 + 9), 2) * Math.max(0, 1 - v * 1.6), rust = Math.max(0, Math.pow(n, 4) * 1.6 + drip * 0.8 - 0.22);
+    const grime = fbm(u * 3 + 1, v * 2) * 0.18, k = 0.9 - grime + rib * 0.08, c = rust > 0.08 ? [150, 84, 50] : [255, 255, 255];
+    return [...shade(c, band ? k * 0.75 : k), band ? 1.2 : rib * 0.5 - Math.min(0.5, rust)];
   }, 3.5),
   barrier: makeTex(256, (u, v) => {
     const n = fbm(u * 8, v * 8), stripe = v < 0.22 && ((u * 6 + v * 1.4) % 1) < 0.5, top = v < 0.22;
@@ -429,24 +388,39 @@ const T = {
 const mat = (t, o = {}) => new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, roughness: 0.9, metalness: 0, ...o });
 
 /* ---------- build the level ---------- */
+// unit box whose UVs repeat once every `ts` metres on every face, so one texture serves every box size
+function boxGeo(sx, sy, sz, ts) {
+  const g = new THREE.BoxGeometry(sx, sy, sz), uv = g.attributes.uv, dims = [[sz, sy], [sz, sy], [sx, sz], [sx, sz], [sx, sy], [sx, sy]];
+  for (let f = 0; f < 6; f++) for (let i = 0; i < 4; i++) { const j = f * 4 + i; uv.setXY(j, uv.getX(j) * dims[f][0] / ts, uv.getY(j) * dims[f][1] / ts); }
+  return g;
+}
+const MATS = {
+  concrete: { m: mat(T.concrete), ts: 2.5 }, brick: { m: mat(T.brick), ts: 1.25 }, slab: { m: mat(T.concrete, { roughness: 0.95 }), ts: 2.5 }, step: { m: mat(T.concrete), ts: 2.5 },
+  container: { m: mat(T.container, { roughness: 0.55, metalness: 0.5 }), ts: 2.5, tint: ['#3d6e8f', '#8c4a3a', '#56704a', '#b08a3c', '#5b5f66'] },
+  crate: { m: mat(T.crate, { roughness: 0.8 }), ts: 2.4 }, barrier: { m: mat(T.barrier), ts: 2.3 },
+  grate: { m: mat(T.grate, { roughness: 0.6, metalness: 0.7 }), ts: 1.25 },
+  metal: { m: new THREE.MeshStandardMaterial({ color: '#2d3134', roughness: 0.45, metalness: 0.75 }), ts: 1 },
+  lamp: { m: new THREE.MeshStandardMaterial({ color: '#fff3dc', emissive: '#ffe9c4', emissiveIntensity: 3.5, roughness: 0.6 }), ts: 1 },
+};
+for (const l of M.lamps) { const pl = new THREE.PointLight('#ffd9a8', 18, 16, 1.6); pl.position.set(l.x, l.y - 0.3, l.z); scene.add(pl); }
 {
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(MW * CS, MH * CS), mat(T.floor, { roughness: 0.97 }));
   floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
   const outer = new THREE.Mesh(new THREE.PlaneGeometry(900, 900), new THREE.MeshStandardMaterial({ color: '#6f6a5c', roughness: 1 }));
   outer.rotation.x = -Math.PI / 2; outer.position.y = -0.05; outer.receiveShadow = true; scene.add(outer);
-  const kinds = { '#': { m: mat(T.concrete), h: 5 }, C: { m: mat(T.container, { roughness: 0.55, metalness: 0.5 }), h: 2.4 }, c: { m: mat(T.crate, { roughness: 0.8 }), h: 1.2 }, l: { m: mat(T.barrier), h: 1.0 } };
-  const cols = ['#3d6e8f', '#8c4a3a', '#56704a', '#b08a3c', '#5b5f66'];
+  // group identical boxes (kind + size) into instanced meshes
+  const groups = new Map();
+  for (const b of M.boxes) { const key = `${b.kind}|${b.sx.toFixed(2)}|${b.sy.toFixed(2)}|${b.sz.toFixed(2)}`; (groups.get(key) || groups.set(key, []).get(key)).push(b); }
   const d = new THREE.Object3D(), col = new THREE.Color();
-  for (const ch in kinds) {
-    const k = kinds[ch], cells = [];
-    for (let z = 0; z < MH; z++) for (let x = 0; x < MW; x++) if (ROWS[z][x] === ch) cells.push([x, z]);
-    const sz = ch === 'c' ? CS * 0.96 : CS;
-    const im = new THREE.InstancedMesh(new THREE.BoxGeometry(sz, k.h, sz), k.m, cells.length);
-    im.castShadow = true; im.receiveShadow = true;
-    cells.forEach(([x, z], i) => {
-      d.position.set(cellX(x), k.h / 2, cellZ(z)); d.rotation.set(0, 0, 0); d.updateMatrix(); im.setMatrixAt(i, d.matrix);
-      if (ch === 'C') im.setColorAt(i, col.set(cols[(hash2(x, z) * cols.length) | 0]));
-      else { const v = 0.86 + hash2(x * 3, z * 7) * 0.2; im.setColorAt(i, col.setRGB(v, v, v)); }
+  for (const list of groups.values()) {
+    const b0 = list[0], k = MATS[b0.kind] || MATS.concrete;
+    const im = new THREE.InstancedMesh(boxGeo(b0.sx, b0.sy, b0.sz, k.ts), k.m, list.length);
+    im.castShadow = im.receiveShadow = true;
+    list.forEach((b, i) => {
+      d.position.set(b.x, b.y, b.z); d.updateMatrix(); im.setMatrixAt(i, d.matrix);
+      const h = hash2(Math.round(b.x * 7), Math.round(b.z * 7) + Math.round(b.y * 3));
+      if (k.tint) im.setColorAt(i, col.set(k.tint[(h * k.tint.length) | 0]));
+      else if (b0.kind !== 'metal') { const v = 0.86 + h * 0.2; im.setColorAt(i, col.setRGB(v, v, v)); }
     });
     scene.add(im);
   }
@@ -575,7 +549,7 @@ const Client = {
       case 'welcome': this.id = m.id; this.mode = m.mode; this.lastSeq = 0; enterGame(m.code); break;
       case 'roster': this.roster.clear(); for (const [id, name, team, bot] of m.list) this.roster.set(id, { name, team, bot }); this.syncEnts(); break;
       case 's': this.snap(m); break;
-      case 'spawn': if (m.id === this.id) localSpawn(m); else { const e = this.ents.get(m.id); if (e) { e.x = e.tx = m.x; e.z = e.tz = m.z; e.y = e.ty = 0; } } break;
+      case 'spawn': if (m.id === this.id) localSpawn(m); else { const e = this.ents.get(m.id); if (e) { e.x = e.tx = m.x; e.z = e.tz = m.z; e.y = e.ty = m.y || 0; } } break;
       case 'fire': this.remoteFire(m); break;
       case 'hurt': $('#dmg').style.opacity = 1; setTimeout(() => { $('#dmg').style.opacity = 0; }, 90); sndBeep(90, 0.12, 0.2, 'sawtooth'); break;
       case 'kill': this.onKill(m); break;
@@ -628,41 +602,48 @@ let msgTimer = 0;
 function announce(text, team) { const el = $('#msg'); el.textContent = text; el.style.color = team ? TEAM_COL[team] : ''; el.style.opacity = 1; clearTimeout(msgTimer); msgTimer = setTimeout(() => { el.style.opacity = 0; }, 3200); }
 
 function localSpawn(m) {
-  Object.assign(me, { x: m.x, y: 0, z: m.z, vx: 0, vy: 0, vz: 0, yaw: m.yaw, pitch: 0, alive: true, hp: 100, reload: 0, bloom: 0, lean: 0, deadT: 0 });
+  Object.assign(me, { x: m.x, y: m.y || 0, z: m.z, vx: 0, vy: 0, vz: 0, yaw: m.yaw, pitch: 0, alive: true, hp: 100, reload: 0, bloom: 0, lean: 0, deadT: 0 });
   me.ammo = WPN.map((w) => w.mag); me.res = WPN.map((w) => w.res); setWeapon(0, true);
+  if (TEST && Q.get('pos')) { const [x, y, z, yaw, pitch] = Q.get('pos').split(',').map(Number); Object.assign(me, { x, y, z, yaw: yaw || 0, pitch: pitch || 0 }); }
   $('#dead').style.display = 'none';
 }
 function localDie() { me.alive = false; me.deadT = 0; me.reload = 0; mouseL = false; sndBeep(60, 0.4, 0.25, 'sawtooth'); }
 function setWeapon(i, force) { if (i === me.w && !force) return; me.w = i; me.reload = 0; me.draw = 0.3; buildViewModel(i); }
 
 /* ---------- local movement ---------- */
-const R = 0.32, STEP = 0.35;
-function blockedAt(x, z, feet) { const lim = feet + STEP; return hAt(x - R, z - R) > lim || hAt(x + R, z - R) > lim || hAt(x - R, z + R) > lim || hAt(x + R, z + R) > lim; }
-function groundAt(x, z, feet) { let g = 0; for (const [dx, dz] of [[-R, -R], [R, -R], [-R, R], [R, R]]) { const h = hAt(x + dx, z + dz); if (h <= feet + STEP && h > g) g = h; } return g; }
+const R = 0.32, H_STAND = 1.75, H_CROUCH = 1.15;
 const locked = () => TEST || document.pointerLockElement === canvas;
 function updateMe(dt) {
   const act = me.alive && locked();
   let f = 0, s = 0;
   if (act) { f = (K.w ? 1 : 0) - (K.s ? 1 : 0); s = (K.d ? 1 : 0) - (K.a ? 1 : 0); }
-  me.cr = act && !!K.c;
+  // crouch on request, and stay crouched while something is too low to stand under (window sills, under stairs)
+  me.cr = (act && !!K.c) || (me.cr && me.alive && M.ceilingAt(me.x, me.z, me.y, R) < me.y + H_STAND + 0.05);
+  const bh = me.cr ? H_CROUCH : H_STAND;
   const sp = me.cr ? 2.6 : K.shift ? 3 : 5.6, sy = Math.sin(me.yaw), cy = Math.cos(me.yaw);
   let wx = -sy * f + cy * s, wz = -cy * f - sy * s; const wl = Math.hypot(wx, wz); if (wl > 0) { wx /= wl; wz /= wl; }
+  // ladders: grab when facing the rungs (or already part-way up); W climbs, S descends
+  const lad = act ? M.ladderAt(me.x, me.z) : null;
+  const onLad = !!lad && me.y <= lad.y1 + 0.02 && (me.y > lad.y0 + 0.2 || (-sy * lad.nx - cy * lad.nz) > 0.4);
   const acc = Math.min(1, dt * (me.onGround ? 12 : 2.5));
   me.vx += (wx * sp - me.vx) * acc; me.vz += (wz * sp - me.vz) * acc;
   if (!me.alive) { me.vx = me.vz = 0; }
-  if (act && K[' '] && me.onGround) { me.vy = 6.9; me.onGround = false; }
+  if (act && K[' '] && me.onGround && !onLad) { me.vy = 6.9; me.onGround = false; }
   const feet = me.y;
-  const nx = me.x + me.vx * dt; if (!blockedAt(nx, me.z, me.y)) me.x = nx; else me.vx = 0;
-  const nz = me.z + me.vz * dt; if (!blockedAt(me.x, nz, me.y)) me.z = nz; else me.vz = 0;
-  me.vy = Math.max(-25, me.vy - 22 * dt); me.y += me.vy * dt;
-  const g = groundAt(me.x, me.z, Math.max(feet, me.y));
-  if (me.y <= g) { me.y = g; me.vy = 0; me.onGround = true; } else me.onGround = false;
+  const nx = me.x + me.vx * dt; if (!M.blockedAt(nx, me.z, me.y, bh, R)) me.x = nx; else me.vx = 0;
+  const nz = me.z + me.vz * dt; if (!M.blockedAt(me.x, nz, me.y, bh, R)) me.z = nz; else me.vz = 0;
+  if (onLad) { me.vy = f > 0 ? 3.4 : f < 0 ? -3.4 : 0; me.onGround = true; }
+  else me.vy = Math.max(-25, me.vy - 22 * dt);
+  me.y += me.vy * dt;
+  if (me.vy > 0) { const c = M.ceilingAt(me.x, me.z, feet, R); if (me.y + bh > c) { me.y = Math.max(feet, c - bh); me.vy = 0; } }
+  const g = M.groundAt(me.x, me.z, Math.max(feet, me.y), R);
+  if (me.y <= g) { me.y = g; if (me.vy < 0) me.vy = 0; me.onGround = true; } else if (!onLad) me.onGround = false;
 
   // camera
   const wantLean = act ? (K.e ? 1 : 0) - (K.q ? 1 : 0) : 0; me.lean += (wantLean - me.lean) * Math.min(1, dt * 10);
   me.eye += ((me.cr ? 1.05 : 1.62) - me.eye) * Math.min(1, dt * 12);
   let lx = cy * me.lean * 0.5, lz = -sy * me.lean * 0.5;
-  if (hAt(me.x + lx * 1.3, me.z + lz * 1.3) > me.y + me.eye) { lx = lz = 0; }
+  if (M.solidAt(me.x + lx * 1.3, me.y + me.eye, me.z + lz * 1.3)) { lx = lz = 0; }
   if (me.alive) { camera.position.set(me.x + lx, me.y + me.eye, me.z + lz); camera.rotation.set(me.pitch, me.yaw, -me.lean * 0.16); }
   else {
     me.deadT += dt; me.respawnIn = Math.max(0, me.respawnIn - dt);
@@ -855,6 +836,8 @@ $('#copyBtn').addEventListener('click', () => {
 });
 
 if (Q.has('low')) { $('#gfx').value = 'low'; $('#gfx').dispatchEvent(new Event('change')); }
+// ?test[&mode=ctf&bots=4&pos=x,y,z,yaw,pitch] — offline practice match (no matchmaking), also used for screenshots
+if (TEST) { Net.isHost = true; Net.code = 'TEST0'; Host.start(Q.get('mode') || 'dm', +(Q.get('bots') ?? 4), 'Tester'); }
 
 /* ---------- main loop ---------- */
 let last = performance.now(), sendAcc = 0, menuT = 0;
@@ -871,4 +854,4 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-window.__g = { Host, Client, Net, me, toHost, bfs, BASE, SPAWNS, toCx, toCz, WPN };
+window.__g = { Host, Client, Net, me, toHost, M, BASE, SPAWNS, toCx, toCz, WPN };
