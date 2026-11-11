@@ -28,7 +28,7 @@ const p = M.findPath(BASE[1].x, BASE[1].y, BASE[1].z, BASE[2].x, BASE[2].y, BASE
 console.log(`base-to-base path: ${p ? p.length + ' steps, max height ' + Math.max(...p.map((n) => n.y)).toFixed(1) : 'NONE'}`);
 // unreachable islands (nodes not connected to base 1) — list a few
 const isl = [];
-for (let ci = 0; ci < MW * MH; ci++) floors[ci].forEach((f, fi) => { if (!seen.has(ci * 4 + fi)) isl.push(`(${ci % MW},${(ci / MW) | 0}) y=${f}`); });
+for (let ci = 0; ci < MW * MH; ci++) floors[ci].forEach((f, fi) => { if (!seen.has(ci * M.NODE + fi)) isl.push(`(${ci % MW},${(ci / MW) | 0}) y=${f}`); });
 if (isl.length) console.log(`\n${isl.length} nav nodes not reachable from base 1, e.g.: ${isl.slice(0, 12).join('  ')}`);
 console.log(bad ? `\nFAIL: ${bad} problems` : '\nOK');
 process.exit(bad ? 1 : 0);

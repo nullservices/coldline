@@ -5,6 +5,9 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import * as M from './map.js';
 
 /* =====================================================================
@@ -236,7 +239,7 @@ const Host = {
       const g = M.groundAt(b.x, b.z, b.y, 0.25, 1.45), wp = ai.path && ai.path[ai.pi];
       if (g >= b.y) b.y = g; else if (!(wp && Math.abs(wp.y - b.y) < 0.6 && wp.y > g + 0.5)) b.y = Math.max(g, b.y - 9 * dt);
     }
-    b.cr = false;
+    b.cr = TEST && Q.has('crouch');
     if (tgt) {
       const d = Math.hypot(tgt.x - b.x, tgt.z - b.z), ty = tgt.y + (tgt.cr ? 0.75 : 1.15);
       b.pitch = Math.atan2(ty - (b.y + 1.5), d);
@@ -285,31 +288,35 @@ const canvas = $('#c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.52;
+renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.55;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(74, 1, 0.05, 1200);
 camera.rotation.order = 'YXZ'; scene.add(camera);
 
 // sky + sun + image-based lighting
 const sky = new Sky(); sky.scale.setScalar(1000); scene.add(sky);
-const sunDir = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(50), THREE.MathUtils.degToRad(215));
+const sunDir = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(40), THREE.MathUtils.degToRad(150));
 Object.assign(sky.material.uniforms.turbidity, { value: 5 }); sky.material.uniforms.rayleigh.value = 1.4;
 sky.material.uniforms.mieCoefficient.value = 0.006; sky.material.uniforms.mieDirectionalG.value = 0.82;
 sky.material.uniforms.sunPosition.value.copy(sunDir);
-{
-  const pm = new THREE.PMREMGenerator(renderer), s2 = new THREE.Scene(), sk2 = sky.clone(); s2.add(sk2);
-  scene.environment = pm.fromScene(s2, 0, 0.1, 1100).texture; scene.environmentIntensity = 0.3; pm.dispose();
+{ // image-based lighting from a copy of the sky without the sun's glare, so white interiors are not blown out
+  const pm = new THREE.PMREMGenerator(renderer), s2 = new THREE.Scene(), sk2 = new Sky(); sk2.scale.setScalar(1000); s2.add(sk2);
+  const u = sk2.material.uniforms; u.turbidity.value = 8; u.rayleigh.value = 1.0; u.mieCoefficient.value = 0.0005; u.mieDirectionalG.value = 0.3; u.sunPosition.value.copy(sunDir);
+  scene.environment = pm.fromScene(s2, 0, 0.1, 1100).texture; scene.environmentIntensity = 0.12; pm.dispose();
 }
-scene.fog = new THREE.FogExp2('#9fb2c2', 0.004);
+scene.fog = new THREE.FogExp2('#b4bac0', 0.0028);
 const sun = new THREE.DirectionalLight('#ffe2b8', 2.6);
 sun.position.copy(sunDir).multiplyScalar(90); sun.castShadow = true;
 sun.shadow.mapSize.set(4096, 4096);
 Object.assign(sun.shadow.camera, { left: -62, right: 62, top: 62, bottom: -62, near: 10, far: 200 });
 sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.04;
-scene.add(sun, new THREE.HemisphereLight('#bcd4ee', '#5a5246', 0.3));
+scene.add(sun, new THREE.HemisphereLight('#cfd6de', '#6a635a', 0.3));
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
+const gtao = new GTAOPass(scene, camera, 2, 2); gtao.output = GTAOPass.OUTPUT.Default;
+gtao.updateGtaoMaterial({ radius: 0.7, distanceExponent: 1, thickness: 1, scale: 1, samples: 12, distanceFallOff: 1, screenSpaceRadius: false });
+gtao.blendIntensity = 0.85; composer.addPass(gtao);
 const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.18, 0.4, 1.0); composer.addPass(bloom);
 composer.addPass(new OutputPass());
 let gfxHigh = true;
@@ -319,73 +326,33 @@ function resize() {
 }
 window.addEventListener('resize', resize); resize();
 
-/* ---------- procedural PBR textures ---------- */
+/* ---------- materials: photo-scanned CC0 PBR sets (assets/tex, from ambientcg.com) ---------- */
 function hash2(x, y) { let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
-function vn(x, y) { const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi, u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
-  const a = hash2(xi, yi), b = hash2(xi + 1, yi), c = hash2(xi, yi + 1), d = hash2(xi + 1, yi + 1); return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v; }
-const fbm = (x, y) => vn(x, y) * 0.5 + vn(x * 2.1, y * 2.1) * 0.25 + vn(x * 4.3, y * 4.3) * 0.15 + vn(x * 9, y * 9) * 0.1;
-// fn(u,v) -> [r,g,b,height]; returns {map, normalMap}
-function makeTex(size, fn, strength = 2, repeat = [1, 1]) {
-  const cv = document.createElement('canvas'); cv.width = cv.height = size; const cx = cv.getContext('2d'), img = cx.createImageData(size, size);
-  const hts = new Float32Array(size * size);
-  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
-    const c = fn(x / size, y / size, x, y), i = (y * size + x) * 4;
-    img.data[i] = c[0]; img.data[i + 1] = c[1]; img.data[i + 2] = c[2]; img.data[i + 3] = 255; hts[y * size + x] = c[3];
-  }
-  cx.putImageData(img, 0, 0);
-  const nv = document.createElement('canvas'); nv.width = nv.height = size; const nx = nv.getContext('2d'), nimg = nx.createImageData(size, size);
-  const H = (x, y) => hts[((y + size) % size) * size + ((x + size) % size)];
-  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
-    const dx = (H(x + 1, y) - H(x - 1, y)) * strength, dy = (H(x, y + 1) - H(x, y - 1)) * strength, l = Math.hypot(dx, dy, 1), i = (y * size + x) * 4;
-    nimg.data[i] = (-dx / l * 0.5 + 0.5) * 255; nimg.data[i + 1] = (dy / l * 0.5 + 0.5) * 255; nimg.data[i + 2] = (1 / l * 0.5 + 0.5) * 255; nimg.data[i + 3] = 255;
-  }
-  nx.putImageData(nimg, 0, 0);
-  const map = new THREE.CanvasTexture(cv), normalMap = new THREE.CanvasTexture(nv);
-  for (const t of [map, normalMap]) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(repeat[0], repeat[1]); t.anisotropy = 8; }
-  map.colorSpace = THREE.SRGBColorSpace;
-  return { map, normalMap };
+const TL = new THREE.TextureLoader();
+const NO_AO = new Set(['roof', 'plaster', 'asphalt', 'marble', 'steel', 'metal']);
+function pbr(name, o = {}, repeat = 1) {
+  const load = (suf, srgb) => { const t = TL.load(`assets/tex/${name}_${suf}.jpg`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8; t.repeat.set(repeat, repeat); t.channel = 0; if (srgb) t.colorSpace = THREE.SRGBColorSpace; return t; };
+  const m = new THREE.MeshStandardMaterial({ map: load('c', true), normalMap: load('n'), roughnessMap: load('r'), roughness: 1, metalness: 0, ...o });
+  if (!NO_AO.has(name)) { m.aoMap = load('ao'); m.aoMapIntensity = 0.7; }
+  return m;
 }
-const shade = (rgb, k) => [rgb[0] * k, rgb[1] * k, rgb[2] * k];
-const T = {
-  concrete: makeTex(512, (u, v) => {
-    const n = fbm(u * 6, v * 6), fine = hash2((u * 512) | 0, (v * 512) | 0), seam = Math.min(Math.abs(((v * 4) % 1) - 0.5), Math.abs(((u * 2) % 1) - 0.5)) > 0.485 ? 0.55 : 1;
-    const stain = Math.pow(fbm(u * 2.2 + 9, v * 5), 3) * 0.5, k = (0.62 + n * 0.34 + fine * 0.06 - stain) * seam;
-    return [...shade([128, 124, 116], k), n * 0.6 + fine * 0.25 + (seam < 1 ? -1.2 : 0)];
-  }, 3),
-  brick: makeTex(512, (u, v) => {
-    const rows = 8, cols = 4, r = Math.floor(v * rows), off = (r % 2) * 0.5, bu = (u * cols + off) % 1, bv = (v * rows) % 1;
-    const mortar = bu < 0.07 || bv < 0.14, id = hash2(Math.floor(u * cols + off), r), n = fbm(u * 9, v * 9), fine = hash2((u * 512) | 0, (v * 512) | 0);
-    const base = mortar ? [152, 144, 132] : [118 + id * 52, 64 + id * 28, 50 + id * 18], k = 0.72 + n * 0.3 + (mortar ? 0 : fine * 0.12);
-    return [...shade(base, k), mortar ? -1 : n * 0.5 + fine * 0.2];
-  }, 3),
-  grate: makeTex(256, (u, v) => {
-    const gx = (u * 8) % 1, gy = (v * 8) % 1, bar = gx < 0.2 || gy < 0.2, n = fbm(u * 6, v * 6), k = bar ? 0.55 + n * 0.3 : 0.1;
-    return [...shade([112, 114, 118], k), bar ? 1 : -2];
-  }, 2.5),
-  floor: makeTex(1024, (u, v) => {
-    const n = fbm(u * 14, v * 14), fine = hash2((u * 1024) | 0, (v * 1024) | 0), crack = 1;
-    const gx = (u * 4) % 1, gy = (v * 4) % 1, joint = gx < 0.006 || gy < 0.006 ? 0.6 : 1, oil = Math.pow(fbm(u * 3 + 20, v * 3 + 7), 4) * 0.55;
-    const k = (0.5 + n * 0.3 + fine * 0.1 - oil) * crack * joint;
-    return [...shade([158, 152, 142], k), n * 0.25 + fine * 0.3 + (crack < 1 || joint < 1 ? -1.5 : 0)];
-  }, 1.6, [MW / 4, MH / 4]),
-  crate: makeTex(256, (u, v) => {
-    const b = 0.09, edge = u < b || v < b || u > 1 - b || v > 1 - b, plank = ((u * 5) % 1) < 0.05, diag = Math.abs(u - v) < 0.05 && !edge;
-    const grain = fbm(u * 3, v * 40) * 0.35 + fbm(u * 30, v * 30) * 0.1, k = 0.6 + grain - (plank && !edge ? 0.3 : 0) + (edge || diag ? 0.08 : 0);
-    return [...shade(edge || diag ? [150, 112, 66] : [176, 134, 80], k), (edge || diag ? 1 : 0.4) + grain * 0.5 - (plank ? 0.6 : 0)];
-  }, 4),
-  container: makeTex(512, (u, v) => {
-    const rib = Math.sin(u * Math.PI * 2 * 14), band = v < 0.05 || v > 0.95, n = fbm(u * 18, v * 22 + 4);
-    const drip = Math.pow(fbm(u * 40, v * 3 + 9), 2) * Math.max(0, 1 - v * 1.6), rust = Math.max(0, Math.pow(n, 4) * 1.6 + drip * 0.8 - 0.22);
-    const grime = fbm(u * 3 + 1, v * 2) * 0.18, k = 0.9 - grime + rib * 0.08, c = rust > 0.08 ? [150, 84, 50] : [255, 255, 255];
-    return [...shade(c, band ? k * 0.75 : k), band ? 1.2 : rib * 0.5 - Math.min(0.5, rust)];
-  }, 3.5),
-  barrier: makeTex(256, (u, v) => {
-    const n = fbm(u * 8, v * 8), stripe = v < 0.22 && ((u * 6 + v * 1.4) % 1) < 0.5, top = v < 0.22;
-    const c = top ? (stripe ? [226, 176, 40] : [38, 36, 34]) : [176, 172, 164];
-    return [...shade(c, 0.7 + n * 0.3), n * 0.5 + (Math.abs(v - 0.22) < 0.012 ? -1 : 0)];
-  }, 2.5),
+const P = {}; const mp = (n, o) => P[n] || (P[n] = pbr(n, o));
+const c2 = () => mp('concrete2');
+const MATS = {
+  concrete: { m: mp('concrete'), ts: 2.5 }, concrete2: { m: c2(), ts: 2.5 }, brick: { m: mp('brick'), ts: 2.5 }, plaster: { m: mp('plaster', { color: '#c9c4bb' }), ts: 2.5 },
+  // slabs: [+x, -x, top, bottom, +z, -z]
+  floor: { m: [c2(), c2(), mp('carpet'), mp('ceiling'), c2(), c2()], ts: 2.5 },
+  deck: { m: [c2(), c2(), mp('paving2'), c2(), c2(), c2()], ts: 2.5 },
+  roof: { m: [c2(), c2(), mp('roof'), mp('ceiling'), c2(), c2()], ts: 2.5 },
+  marble: { m: mp('marble'), ts: 2.5 }, step: { m: c2(), ts: 2.5 }, barrier: { m: c2(), ts: 2.5 }, planter: { m: c2(), ts: 2.5 },
+  glass: { m: new THREE.MeshPhysicalMaterial({ color: '#7fa3b4', transparent: true, opacity: 0.22, roughness: 0.03, metalness: 0.1, envMapIntensity: 2.2, side: THREE.DoubleSide, depthWrite: false }), ts: 1 },
+  container: { m: mp('corrugated', { metalness: 0.35 }), ts: 2.5, tint: ['#3d6e8f', '#8c4a3a', '#56704a', '#b08a3c', '#5b5f66'] },
+  crate: { m: mp('planks'), ts: 1.25 }, desk: { m: mp('planks'), ts: 1.25 },
+  grate: { m: mp('steel', { metalness: 0.8, roughness: 0.7 }), ts: 1.25 },
+  metal: { m: mp('metal', { color: '#6a6f74', metalness: 0.9, roughness: 0.55 }), ts: 1 },
+  lamp: { m: new THREE.MeshStandardMaterial({ color: '#fff3dc', emissive: '#ffe9c4', emissiveIntensity: 3.5, roughness: 0.6 }), ts: 1 },
 };
-const mat = (t, o = {}) => new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, roughness: 0.9, metalness: 0, ...o });
+for (const l of M.lamps) { const pl = new THREE.PointLight('#ffe6c4', 10, 12, 1.7); pl.position.set(l.x, l.y - 0.3, l.z); scene.add(pl); }
 
 /* ---------- build the level ---------- */
 // unit box whose UVs repeat once every `ts` metres on every face, so one texture serves every box size
@@ -394,19 +361,10 @@ function boxGeo(sx, sy, sz, ts) {
   for (let f = 0; f < 6; f++) for (let i = 0; i < 4; i++) { const j = f * 4 + i; uv.setXY(j, uv.getX(j) * dims[f][0] / ts, uv.getY(j) * dims[f][1] / ts); }
   return g;
 }
-const MATS = {
-  concrete: { m: mat(T.concrete), ts: 2.5 }, brick: { m: mat(T.brick), ts: 1.25 }, slab: { m: mat(T.concrete, { roughness: 0.95 }), ts: 2.5 }, step: { m: mat(T.concrete), ts: 2.5 },
-  container: { m: mat(T.container, { roughness: 0.55, metalness: 0.5 }), ts: 2.5, tint: ['#3d6e8f', '#8c4a3a', '#56704a', '#b08a3c', '#5b5f66'] },
-  crate: { m: mat(T.crate, { roughness: 0.8 }), ts: 2.4 }, barrier: { m: mat(T.barrier), ts: 2.3 },
-  grate: { m: mat(T.grate, { roughness: 0.6, metalness: 0.7 }), ts: 1.25 },
-  metal: { m: new THREE.MeshStandardMaterial({ color: '#2d3134', roughness: 0.45, metalness: 0.75 }), ts: 1 },
-  lamp: { m: new THREE.MeshStandardMaterial({ color: '#fff3dc', emissive: '#ffe9c4', emissiveIntensity: 3.5, roughness: 0.6 }), ts: 1 },
-};
-for (const l of M.lamps) { const pl = new THREE.PointLight('#ffd9a8', 18, 16, 1.6); pl.position.set(l.x, l.y - 0.3, l.z); scene.add(pl); }
 {
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(MW * CS, MH * CS), mat(T.floor, { roughness: 0.97 }));
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(MW * CS, MH * CS), pbr('paving', {}, MW * CS / 2.5));
   floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
-  const outer = new THREE.Mesh(new THREE.PlaneGeometry(900, 900), new THREE.MeshStandardMaterial({ color: '#6f6a5c', roughness: 1 }));
+  const outer = new THREE.Mesh(new THREE.PlaneGeometry(900, 900), pbr('asphalt', {}, 300));
   outer.rotation.x = -Math.PI / 2; outer.position.y = -0.05; outer.receiveShadow = true; scene.add(outer);
   // group identical boxes (kind + size) into instanced meshes
   const groups = new Map();
@@ -415,16 +373,14 @@ for (const l of M.lamps) { const pl = new THREE.PointLight('#ffd9a8', 18, 16, 1.
   for (const list of groups.values()) {
     const b0 = list[0], k = MATS[b0.kind] || MATS.concrete;
     const im = new THREE.InstancedMesh(boxGeo(b0.sx, b0.sy, b0.sz, k.ts), k.m, list.length);
-    im.castShadow = im.receiveShadow = true;
+    im.castShadow = im.receiveShadow = b0.kind !== 'glass';
     list.forEach((b, i) => {
       d.position.set(b.x, b.y, b.z); d.updateMatrix(); im.setMatrixAt(i, d.matrix);
-      const h = hash2(Math.round(b.x * 7), Math.round(b.z * 7) + Math.round(b.y * 3));
-      if (k.tint) im.setColorAt(i, col.set(k.tint[(h * k.tint.length) | 0]));
-      else if (b0.kind !== 'metal') { const v = 0.86 + h * 0.2; im.setColorAt(i, col.setRGB(v, v, v)); }
+      if (k.tint) im.setColorAt(i, col.set(k.tint[(hash2(Math.round(b.x * 7), Math.round(b.z * 7)) * k.tint.length) | 0]));
     });
     scene.add(im);
   }
-  // distant skyline blocks so the yard does not float in emptiness
+  // distant skyline blocks so the campus does not float in emptiness
   const far = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: '#5d6066', roughness: 0.95 }), 46);
   for (let i = 0; i < 46; i++) {
     const a = i / 46 * Math.PI * 2 + hash2(i, 5) * 0.1, r = 85 + hash2(i, 1) * 60, w = 10 + hash2(i, 2) * 22, h = 8 + hash2(i, 3) * 30;
@@ -455,28 +411,48 @@ function flagMesh() {
 }
 const flagMeshes = [flagMesh(), flagMesh()];
 
-/* ---------- soldiers ---------- */
-const skinMat = new THREE.MeshStandardMaterial({ color: '#c99773', roughness: 0.7 });
+/* ---------- soldiers: rigged, animated character (assets/models/soldier.glb, Mixamo "Vanguard") ---------- */
 const gunMat = new THREE.MeshStandardMaterial({ color: '#17191c', roughness: 0.55, metalness: 0.35 });
 const gearMat = new THREE.MeshStandardMaterial({ color: '#2b2e2a', roughness: 0.85 });
-function soldier() {
-  const g = new THREE.Group(), cloth = new THREE.MeshStandardMaterial({ color: '#777', roughness: 0.9 });
-  const add = (geo, m, x, y, z, parent = g) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.castShadow = true; parent.add(o); return o; };
-  const legGeo = new THREE.CapsuleGeometry(0.085, 0.62, 3, 8).translate(0, -0.4, 0);
-  const legL = add(legGeo, cloth, -0.11, 0.86, 0), legR = add(legGeo, cloth, 0.11, 0.86, 0);
-  const upper = new THREE.Group(); upper.position.y = 0.9; g.add(upper);
-  add(new THREE.CapsuleGeometry(0.19, 0.3, 4, 10), cloth, 0, 0.3, 0, upper);
-  add(new THREE.BoxGeometry(0.44, 0.36, 0.3), gearMat, 0, 0.32, 0, upper);          // vest
-  add(new THREE.BoxGeometry(0.3, 0.34, 0.14), gearMat, 0, 0.3, 0.2, upper);            // pack
-  add(new THREE.SphereGeometry(0.115, 12, 10), skinMat, 0, 0.7, 0, upper);
-  const helm = add(new THREE.SphereGeometry(0.135, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), cloth, 0, 0.72, 0, upper);
-  const armGeo = new THREE.CapsuleGeometry(0.06, 0.42, 3, 8);
-  const aL = add(armGeo, cloth, -0.2, 0.36, -0.25, upper); aL.rotation.set(-1.25, 0, -0.5);
-  const aR = add(armGeo, cloth, 0.22, 0.34, -0.18, upper); aR.rotation.set(-1.0, 0, 0.15);
-  add(new THREE.BoxGeometry(0.06, 0.1, 0.78), gunMat, 0.1, 0.4, -0.45, upper);
-  add(new THREE.BoxGeometry(0.05, 0.16, 0.08), gunMat, 0.1, 0.3, -0.3, upper);
-  g.userData = { cloth, legL, legR, upper, helm };
+function gunMesh(i) {
+  const g = new THREE.Group(), w = WPN[i], L = w.len;
+  const part = (sx, sy, sz, x, y, z, m = gunMat) => { const o = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), m); o.position.set(x, y, z); o.castShadow = true; g.add(o); return o; };
+  part(0.045, 0.07, L, 0, 0, -L / 2);                                   // receiver + barrel
+  part(0.03, 0.03, L * 0.45, 0, 0.01, -L - L * 0.2);                    // muzzle
+  part(0.04, 0.13, 0.06, 0, -0.09, -0.06);                              // grip
+  if (i !== 4) part(0.05, 0.08, 0.26, 0, -0.01, 0.13, gearMat);         // stock
+  if (i < 2) part(0.035, 0.16, 0.07, 0, -0.1, -L * 0.45);               // magazine
+  if (i === 3) { const s = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.3, 10), gunMat); s.rotation.x = Math.PI / 2; s.position.set(0, 0.075, -0.25); g.add(s); }
   return g;
+}
+let soldierAsset = null; const soldierQueue = [];
+new GLTFLoader().load('assets/models/soldier.glb', (g) => { soldierAsset = g; soldierQueue.splice(0).forEach(dressSoldier); }, undefined, (e) => console.warn('soldier model failed to load', e));
+function soldier() { const g = new THREE.Group(); g.userData = { team: '#888', ready: false }; if (soldierAsset) dressSoldier(g); else soldierQueue.push(g); return g; }
+const GUN_POS = [8, 12, 4], GUN_ROT = [-1.4, 0.2, 1.5]; // in the hand bone's frame (centimetres)
+function holdGun(u, i) {
+  const hand = u.hand; if (!hand) return;
+  if (u.gun) hand.remove(u.gun);
+  u.gun = gunMesh(i); u.gun.scale.setScalar(100); u.gun.position.fromArray(GUN_POS); u.gun.rotation.fromArray(GUN_ROT); hand.add(u.gun); u.w = i;
+}
+function dressSoldier(g) {
+  const model = SkeletonUtils.clone(soldierAsset.scene); model.rotation.y = Math.PI;
+  const mats = {};
+  model.traverse((o) => { if (o.isMesh) { o.material = o.material.clone(); mats[o.material.name] = o.material; o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; } });
+  const mixer = new THREE.AnimationMixer(model), act = {};
+  for (const c of soldierAsset.animations) if (c.name !== 'TPose') { const a = mixer.clipAction(c); a.play(); a.setEffectiveWeight(c.name === 'Idle' ? 1 : 0); act[c.name] = a; }
+  mixer.update(Math.random() * 2); // desynchronise identical bots
+  const bone = (n) => model.getObjectByName('mixamorig' + n);
+  g.add(model);
+  Object.assign(g.userData, { model, mixer, act, hand: bone('RightHand'), spine: bone('Spine1'), spine2: bone('Spine2'), hips: bone('Hips'), legs: ['Left', 'Right'].map((s) => [bone(s + 'UpLeg'), bone(s + 'Leg')]), body: mats.VanguardBodyMat, visor: mats.Vanguard_VisorMat, ready: true });
+  holdGun(g.userData, g.userData.w || 0);
+  applyTeam(g);
+}
+const _c = new THREE.Color();
+function applyTeam(g, col) {
+  const u = g.userData; if (col) u.team = col; if (!u.ready) return;
+  _c.set(u.team);
+  if (u.body) u.body.color.copy(_c).lerp(new THREE.Color('#ffffff'), 0.3); // uniform takes the team colour
+  if (u.visor) { u.visor.color.copy(_c); u.visor.emissive.copy(_c); u.visor.emissiveIntensity = 1.4; }
 }
 function nameSprite(text, color) {
   const cv = document.createElement('canvas'); cv.width = 256; cv.height = 48; const cx = cv.getContext('2d');
@@ -505,13 +481,7 @@ const flash = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), flashMat); vm
 const flashLight = new THREE.PointLight('#ffb866', 0, 9); camera.add(flashLight); flashLight.position.set(0.15, -0.1, -0.8);
 function buildViewModel(i) {
   vmGun.clear(); const w = WPN[i], L = w.len;
-  const part = (sx, sy, sz, x, y, z, m = gunMat) => { const o = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), m); o.position.set(x, y, z); vmGun.add(o); };
-  part(0.045, 0.07, L, 0, 0, -L / 2);                                   // receiver + barrel
-  part(0.03, 0.03, L * 0.45, 0, 0.01, -L - L * 0.2);                    // muzzle
-  part(0.04, 0.13, 0.06, 0, -0.09, -0.06);                              // grip
-  if (i !== 4) part(0.05, 0.08, 0.26, 0, -0.01, 0.13, gearMat);         // stock
-  if (i < 2) part(0.035, 0.16, 0.07, 0, -0.1, -L * 0.45);               // magazine
-  if (i === 3) { const s = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.3, 10), gunMat); s.rotation.x = Math.PI / 2; s.position.set(0, 0.075, -0.25); vmGun.add(s); }
+  vmGun.add(gunMesh(i));
   const hand = new THREE.Mesh(new THREE.CapsuleGeometry(0.032, 0.1, 3, 8), gearMat); hand.rotation.z = Math.PI / 2; hand.position.set(0, -0.055, -Math.min(L * 0.6, 0.42)); vmGun.add(hand);
   flash.position.set(0.16, -0.13, -0.38 - L * 1.25);
 }
@@ -564,9 +534,9 @@ const Client = {
     for (const [id, r] of this.roster) {
       if (id === this.id) continue;
       let e = this.ents.get(id);
-      if (!e) { e = { id, mesh: soldier(), x: 0, y: 0, z: 0, yaw: 0, tx: 0, ty: 0, tz: 0, tyaw: 0, pitch: 0, alive: false, cr: false, hp: 0, w: 0, walk: 0, tag: null }; e.mesh.visible = false; scene.add(e.mesh); this.ents.set(id, e); }
+      if (!e) { e = { id, mesh: soldier(), x: 0, y: 0, z: 0, yaw: 0, tx: 0, ty: 0, tz: 0, tyaw: 0, pitch: 0, alive: false, cr: false, hp: 0, w: 0, spd: 0, tag: null }; e.mesh.visible = false; scene.add(e.mesh); this.ents.set(id, e); }
       const col = r.team ? TEAM_COL[r.team] : `hsl(${(id * 67) % 360},32%,42%)`;
-      e.mesh.userData.cloth.color.set(col);
+      applyTeam(e.mesh, col);
       if (e.tag) { e.mesh.remove(e.tag); e.tag = null; }
       if (r.team && r.team === this.team(this.id)) { e.tag = nameSprite(r.name, TEAM_COL[r.team]); e.mesh.add(e.tag); }
     }
@@ -718,11 +688,17 @@ function updateEnts(dt) {
     const m = e.mesh, u = m.userData; m.visible = e.alive;
     if (!e.alive) continue;
     m.position.set(e.x, e.y, e.z); m.rotation.y = e.yaw;
-    const spd = Math.hypot(e.x - px, e.z - pz) / Math.max(dt, 0.001); e.walk += dt * spd * 2.4;
-    const sw = Math.sin(e.walk) * Math.min(0.7, spd * 0.16);
-    u.legL.rotation.x = sw; u.legR.rotation.x = -sw;
-    u.upper.position.y = e.cr ? 0.55 : 0.9; u.legL.position.y = u.legR.position.y = e.cr ? 0.55 : 0.86; u.legL.scale.y = u.legR.scale.y = e.cr ? 0.6 : 1;
-    u.upper.rotation.x = clamp(e.pitch, -0.9, 0.9) * 0.6;
+    const spd = Math.hypot(e.x - px, e.z - pz) / Math.max(dt, 0.001); e.spd += (spd - e.spd) * Math.min(1, dt * 8);
+    if (!u.ready) continue;
+    if (u.w !== e.w) holdGun(u, e.w);
+    // blend idle / walk / run by speed, then layer aim pitch and crouch on top of the animation
+    const run = clamp((e.spd - 2.6) / 2.4, 0, 1), walk = clamp(e.spd / 1.2, 0, 1) * (1 - run);
+    u.act.Idle.setEffectiveWeight(1 - Math.max(walk, run)); u.act.Walk.setEffectiveWeight(walk); u.act.Run.setEffectiveWeight(run);
+    u.act.Walk.setEffectiveTimeScale(clamp(e.spd / 1.7, 0.6, 1.4)); u.act.Run.setEffectiveTimeScale(clamp(e.spd / 5.4, 0.7, 1.3));
+    u.mixer.update(dt);
+    const pitch = clamp(e.pitch, -0.9, 0.9);
+    if (u.spine) u.spine.rotation.x -= pitch * 0.45; if (u.spine2) u.spine2.rotation.x -= pitch * 0.35;
+    if (e.cr) { u.hips.position.y -= 42; u.hips.rotation.x += 0.35; for (const [up, low] of u.legs) { if (up) up.rotation.x -= 1.0; if (low) low.rotation.x += 1.7; } }
   }
   const t = performance.now() / 1000;
   flagMeshes.forEach((fm, i) => {

@@ -8,10 +8,14 @@
 
    Cell characters (any layer):
      .  empty                      #  concrete block, full layer height
-     B  brick block                C  shipping container (2.4 high)
-     c  crate (1.2)                l  low barrier (1.0)
-     o  square pillar               =  floor slab (layer k > 0 only)
-     r  floor slab with railings on every edge that drops off
+     B  brick block                p  plaster interior wall, full layer
+     g  glass curtain wall, full layer (see and shoot through, blocks movement)
+     C  shipping container (2.4)   c  crate (1.2)
+     l  low barrier / parapet (1.0) P  planter (0.9)    d  desk (0.75)
+     o  square pillar               m  marble floor tile (ground)
+     =  office floor slab (layer k > 0): carpet on top, ceiling tiles below
+     r  deck slab with railings on every edge that drops off (terraces)
+     R  roof slab
      w  window: sill to 1.0, header from 2.2 (crouch-jump through)
      a  doorway: header only, from 2.2
      ^ v < >  stairs rising towards the arrow (one full layer per cell)
@@ -23,55 +27,72 @@
    ===================================================================== */
 export const CS = 2.5, H = 2.8, SLAB = 0.25, STEP = 0.4, RAIL_H = 1.05;
 
-const TOP = [[
-  '#################################',
-  '#S.S.S.S...BL..c....C...........#',
-  '#.....F.........................#',
-  '#..........B...c...D...C........#',
-  '#.>........B....C..........c....#',
-  '#BBBB.BBBB.B............l.......#',
-  '#..l.......c...vv..l....c....v..#',
-  '#....C.....c...........C...######',
-  '#.............o........c...######',
-  '#...C.......c.........c..cC######',
-  '#...D.....l..........C..C..######',
-  '#..l.............o...C.....######',
-  '#....c....ll.........c..D..######',
-  '#.c........>#######<.c.....######',
-  '#...l.......#######........######',
-], [
-  '#################################',
-  '#..........BL...................#',
-  '#..*....*..B....................#',
-  '#..rrrrrr>=w....................#',
-  '#..=S===S==w....................#',
-  '#wwwwBwwwwBB....................#',
-  '#...............................#',
-  '#..............rr..........r....#',
-  '#..............rr..........r.c..#',
-  '#..............rr..........r....#',
-  '#..............rr..........r.D..#',
-  '#..............rr..........r....#',
-  '#..............rr..........r....#',
-  '#.............l...l........r....#',
-  '#...............c..........r....#',
-], [
-  '#################################',
-  '#==========.....................#',
-  '#==========.....................#',
-  '#========.=l....................#',
-  '#==========l....................#',
-  '#lllllllllll....................#',
+const TOP = [[ // ground
+  'ppppppppppppp####################',
+  'p..##.......g.....o...o...o.....#',
+  'p..##.......g...................#',
+  'p.....o..o..g....>..............#',
+  'p....mmmmmmmg.....o...o...o.....#',
+  'p....mmddmmm......P....P........#',
+  'p....mommommgL..................#',
+  'p.>.mmmmFmmmg...........l.....^.#',
+  'pgggg..gggg.#...................#',
+  '#...P.......P.......P.......P...#',
+  '#.......D.............D.........#',
+  '#........l......v.....l.........#',
+  '#............ggggggg............#',
+  '#....l.......gmmmmmg........l...#',
+  '#.............mmmmmg............#',
+], [ // +2.8 m: office floor 2, parking deck, pavilion floor 2
+  'ppppppppppppp####################',
+  'p==##=S===S=g.....rrrrrrrrrrrrrr#',
+  'p==##=======g.....rrrrrrrrrrrrrr#',
+  'p=====o==o==g.....rrrrrrrDrrrrrr#',
+  'p=====ddd===g.....rrrrrrrrrrrrrr#',
+  'p=>===dd====g.....rrrrrrrrrrrrrr#',
+  'p=====o==oS=gL....rrrrrrrrrrrrrr#',
+  'p=.=====d===g...................#',
+  'pggggggggggg#...................#',
   '#...............................#',
   '#...............................#',
   '#...............................#',
+  '#............ggg=ggg............#',
+  '#............g=====g............#',
+  '#............g<=D==g............#',
+], [ // +5.6 m: office floor 3 (set back), terraces, pavilion roof terrace
+  'ppppppppppppp####################',
+  'p==##===grrrr...................#',
+  'p==##S==grrrr...................#',
+  'p=>===o=grrrr...................#',
+  'p=====d==rrrr...................#',
+  'p=.===S=grrrr...................#',
+  'p=====o=grrrr...................#',
+  'pggggg=ggrrrr...................#',
+  'prrrrrrrrrrrr...................#',
   '#...............................#',
   '#...............................#',
   '#...............................#',
-  '#...............................#',
-  '#...............................#',
-  '#...............................#',
+  '#............rrrrrrr............#',
+  '#............rrrrrrr............#',
+  '#............r.rrrrr............#',
+], [ // +8.4 m: roof with parapet and lift machine room; the boundary wall only rises here beside the roof
+  '##########.......................',
+  '#RR##RRRl........................',
+  '#RR##RRRl........................',
+  '#R.RRRRRl........................',
+  '#RRRRRRRl........................',
+  '#RRRRRRRl........................',
+  '#RRRRRRRl........................',
+  '#llllllll........................',
+  '.................................',
+  '.................................',
+  '.................................',
+  '.................................',
+  '.................................',
+  '.................................',
+  '.................................',
 ]];
+
 const FLIP = { '^': 'v', 'v': '^', '<': '>', '>': '<' };
 const mirror = (rows) => rows.concat(rows.slice().reverse().map((r) => [...r].reverse().map((c) => FLIP[c] || c).join('')));
 export const LAYERS = TOP.map(mirror);
@@ -91,7 +112,8 @@ const cells = [];          // per cell: { s: [{x0,x1,z0,z1,y0,y1}], stair, ladde
 for (let i = 0; i < MW * MH; i++) cells.push({ s: [], stair: null, ladder: null, rails: [] });
 const at = (cx, cz) => cells[cz * MW + cx];
 const chr = (k, cx, cz) => (k < 0 || k >= LAYERS.length || cx < 0 || cz < 0 || cx >= MW || cz >= MH ? '#' : LAYERS[k][cz][cx]);
-const FULL = { '#': 'concrete', B: 'brick' };
+const FULL = { '#': 'concrete', B: 'brick', p: 'plaster' };
+const WALLISH = (ch) => FULL[ch] || ch === 'w' || ch === 'g';
 
 function solid(cx, cz, x0, x1, z0, z1, y0, y1, kind, render = true) {
   const X = cellX(cx) - CS / 2, Z = cellZ(cz) - CS / 2;
@@ -107,16 +129,27 @@ LAYERS.forEach((L, k) => {
     const ch = L[cz][cx], team = cz < MH / 2 ? 1 : 2, c = at(cx, cz);
     if (ch === '.') continue;
     if (FULL[ch]) { solid(cx, cz, 0, CS, 0, CS, y0, y0 + H, FULL[ch]); continue; }
-    if (k > 0 && ch !== 'L' && ch !== '*' && !FULL[chr(k - 1, cx, cz)]) solid(cx, cz, 0, CS, 0, CS, y0 - SLAB, y0, ch === 'r' ? 'grate' : 'slab');
+    if (k > 0 && ch !== 'L' && !FULL[chr(k - 1, cx, cz)]) solid(cx, cz, 0, CS, 0, CS, y0 - SLAB, y0, ch === 'r' ? 'deck' : ch === 'R' || ch === 'l' ? 'roof' : 'floor');
     const m = CS * 0.5;
+    if (ch === 'g') { // curtain wall: a thin pane with a spandrel band above and a sill below; blocks movement but not sight or shots
+      at(cx, cz).s.push({ x0: cellX(cx) - CS / 2, x1: cellX(cx) + CS / 2, z0: cellZ(cz) - CS / 2, z1: cellZ(cz) + CS / 2, y0, y1: y0 + H, ghost: true });
+      const m = CS / 2, alongX = WALLISH(chr(k, cx - 1, cz)) || WALLISH(chr(k, cx + 1, cz)), t = 0.06;
+      const pane = (a, b, y1, y2, kind) => alongX ? deco(cx, cz, 0, CS, m - a, m + b, y1, y2, kind) : deco(cx, cz, m - a, m + b, 0, CS, y1, y2, kind);
+      pane(t, t, y0 + 0.1, y0 + H - 0.35, 'glass'); pane(0.2, 0.2, y0 + H - 0.35, y0 + H, 'concrete'); pane(0.15, 0.15, y0, y0 + 0.1, 'metal');
+      for (const q of [0.02, CS / 2 - 0.03, CS - 0.08]) alongX ? deco(cx, cz, q, q + 0.06, m - 0.08, m + 0.08, y0 + 0.1, y0 + H - 0.35, 'metal') : deco(cx, cz, m - 0.08, m + 0.08, q, q + 0.06, y0 + 0.1, y0 + H - 0.35, 'metal');
+      continue;
+    }
     if (ch === 'C') { solid(cx, cz, 0, CS, 0, CS, y0, y0 + 2.4, 'container'); c.tint = 1; }
+    else if (ch === 'P') solid(cx, cz, 0.2, CS - 0.2, 0.2, CS - 0.2, y0, y0 + 0.9, 'planter');
+    else if (ch === 'd') solid(cx, cz, 0.3, CS - 0.3, 0.55, CS - 0.55, y0 + 0.02, y0 + 0.75, 'desk');
+    else if (ch === 'm') solid(cx, cz, 0, CS, 0, CS, y0, y0 + 0.04, 'marble');
     else if (ch === 'c') solid(cx, cz, 0.05, CS - 0.05, 0.05, CS - 0.05, y0, y0 + 1.2, 'crate');
     else if (ch === 'l') solid(cx, cz, 0.1, CS - 0.1, 0.1, CS - 0.1, y0, y0 + 1.0, 'barrier');
     else if (ch === 'o') solid(cx, cz, m - 0.25, m + 0.25, m - 0.25, m + 0.25, y0 - (k ? SLAB : 0), y0 + H, 'concrete');
     else if (ch === 'w') {
       solid(cx, cz, 0, CS, 0, CS, y0, y0 + 1.0, 'brick'); solid(cx, cz, 0, CS, 0, CS, y0 + 2.2, y0 + H, 'brick');
       // frame: pick the thin axis from the neighbours that are walls
-      const alongX = FULL[chr(k, cx - 1, cz)] || chr(k, cx - 1, cz) === 'w' || FULL[chr(k, cx + 1, cz)] || chr(k, cx + 1, cz) === 'w';
+      const alongX = WALLISH(chr(k, cx - 1, cz)) || WALLISH(chr(k, cx + 1, cz));
       for (const t of [0.05, CS / 2 - 0.04, CS - 0.13]) alongX ? deco(cx, cz, t, t + 0.08, m - 0.1, m + 0.1, y0 + 1.0, y0 + 2.2, 'metal') : deco(cx, cz, m - 0.1, m + 0.1, t, t + 0.08, y0 + 1.0, y0 + 2.2, 'metal');
     }
     else if (ch === 'a') solid(cx, cz, 0, CS, 0, CS, y0 + 2.2, y0 + H, 'concrete');
@@ -147,7 +180,7 @@ const cellAt = (x, z) => { const cx = toCx(x), cz = toCz(z); return cx < 0 || cz
 export function solidAt(x, y, z) {
   const c = cellAt(x, z); if (!c) return y < MAXY;
   if (y < 0) return true;
-  for (const s of c.s) if (y >= s.y0 && y < s.y1 && x >= s.x0 && x < s.x1 && z >= s.z0 && z < s.z1) return true;
+  for (const s of c.s) if (!s.ghost && y >= s.y0 && y < s.y1 && x >= s.x0 && x < s.x1 && z >= s.z0 && z < s.z1) return true;
   if (c.stair) { const h = stairH(c, x, z); if (y < h && y >= c.stair.y0 - SLAB - 0.01) return true; }
   return false;
 }
@@ -193,19 +226,29 @@ export function los(ax, ay, az, bx, by, bz) {
 }
 
 /* ---------- walkable surfaces (floors) per cell ---------- */
+export const NODE = 6; // max floors per cell
 const covers = (s, cx, cz) => { const x = cellX(cx), z = cellZ(cz); return x >= s.x0 && x < s.x1 && z >= s.z0 && z < s.z1; };
 function clear(c, cx, cz, f) { for (const s of c.s) if (covers(s, cx, cz) && s.y0 < f + 1.6 && s.y1 > f + 0.05) return false; return true; }
-export const floors = []; // per cell: sorted array of standable heights (stairs: single mid node)
+export const floors = [];   // per cell: sorted array of standable heights; a stair cell's last entry is the stair itself (mid height)
+export const stairIdx = []; // per cell: index of the stair node in floors, or -1
 for (let cz = 0; cz < MH; cz++) for (let cx = 0; cx < MW; cx++) {
-  const c = at(cx, cz), fs = new Set();
-  if (c.stair) { floors.push([c.stair.y0 + H / 2]); continue; }
+  const c = at(cx, cz), fs = [];
+  const lim = c.stair ? c.stair.y0 - SLAB - 0.1 : MAXY - 1; // under an upper-floor stair the lower floors stay walkable
   const cand = [0]; for (const s of c.s) if (covers(s, cx, cz)) cand.push(s.y1);
   if (c.ladder) cand.push(c.ladder.y0, c.ladder.y1);
-  for (const f of cand) if (f < MAXY - 1 && clear(c, cx, cz, f)) fs.add(Math.round(f * 100) / 100);
-  if (c.ladder) fs.add(c.ladder.y1);
-  floors.push([...fs].sort((a, b) => a - b));
+  for (const f of cand.sort((a, b) => a - b)) if (f < lim && clear(c, cx, cz, f) && !fs.some((g) => Math.abs(g - f) < 0.2)) fs.push(Math.round(f * 100) / 100);
+  if (c.ladder && !fs.includes(c.ladder.y1)) fs.push(c.ladder.y1);
+  if (c.stair) fs.push(c.stair.y0 + H / 2);
+  stairIdx.push(c.stair ? fs.length - 1 : -1);
+  if (fs.length > NODE) throw new Error(`cell ${cx},${cz} has ${fs.length} floors`);
+  floors.push(fs);
 }
-const floorNear = (cx, cz, y, tol = 0.5) => { if (cx < 0 || cz < 0 || cx >= MW || cz >= MH) return false; const c = at(cx, cz); if (c.stair) return Math.abs(c.stair.y0 - y) < tol || Math.abs(c.stair.y0 + H - y) < tol; return floors[cz * MW + cx].some((f) => f <= y + 0.05 && f >= y - tol); };
+const floorNear = (cx, cz, y, tol = 0.5) => {
+  if (cx < 0 || cz < 0 || cx >= MW || cz >= MH) return false;
+  const c = at(cx, cz), ci = cz * MW + cx;
+  if (c.stair && (Math.abs(c.stair.y0 - y) < tol || Math.abs(c.stair.y0 + H - y) < tol)) return true;
+  return floors[ci].some((f, i) => i !== stairIdx[ci] && f <= y + 0.05 && f >= y - tol);
+};
 
 // pass 2: railings on 'r' cells, then ladder render info
 LAYERS.forEach((L, k) => {
@@ -215,7 +258,7 @@ LAYERS.forEach((L, k) => {
     const c = at(cx, cz);
     D4.forEach(([dx, dz], d) => {
       if (floorNear(cx + dx, cz + dz, y0)) return;
-      const n = chr(k, cx + dx, cz + dz); if (FULL[n] || n === 'w') return;
+      if (WALLISH(chr(k, cx + dx, cz + dz))) return;
       c.rails[d] = y0 + RAIL_H;
       const t = 0.1;
       if (dx > 0) solid(cx, cz, CS - t, CS, 0, CS, y0, y0 + RAIL_H, 'rail', false); else if (dx < 0) solid(cx, cz, 0, t, 0, CS, y0, y0 + RAIL_H, 'rail', false);
@@ -230,7 +273,7 @@ LAYERS.forEach((L, k) => {
 for (let cz = 0; cz < MH; cz++) for (let cx = 0; cx < MW; cx++) {
   const c = at(cx, cz); if (!c.ladder) continue;
   const k = Math.round(c.ladder.y0 / H);
-  let best = D4.find(([dx, dz]) => FULL[chr(k, cx + dx, cz + dz)]) || D4.find(([dx, dz]) => at(cx + dx, cz + dz).s.some((s) => s.y1 >= c.ladder.y1 - 0.01)) || [0, -1];
+  let best = D4.find(([dx, dz]) => WALLISH(chr(k, cx + dx, cz + dz))) || D4.find(([dx, dz]) => at(cx + dx, cz + dz).s.some((s) => s.y1 >= c.ladder.y1 - 0.01)) || [0, -1];
   const [nx, nz] = best; c.ladder.nx = nx; c.ladder.nz = nz;
   ladders.push({ x: cellX(cx), z: cellZ(cz), y0: c.ladder.y0, y1: c.ladder.y1, nx, nz });
   const m = CS / 2, off = 0.35, { y0, y1 } = c.ladder;
@@ -240,34 +283,38 @@ for (let cz = 0; cz < MH; cz++) for (let cx = 0; cx < MW; cx++) {
 }
 
 /* ---------- bot navigation ---------- */
-const NODE = 4; // max floors per cell
 const nid = (ci, fi) => ci * NODE + fi;
-function nearestFloor(ci, y) { const fs = floors[ci]; let b = -1, bd = 1e9; fs.forEach((f, i) => { const d = Math.abs(f - y); if (d < bd) { bd = d; b = i; } }); return b; }
+const railBlocks = (top, f) => top !== undefined && top - RAIL_H < f + 0.5 && top > f + 0.3; // a railing only blocks the floor it stands on
+function nearestFloor(ci, y) { const fs = floors[ci]; let b = -1, bd = 1e9; fs.forEach((f, i) => { if (i === stairIdx[ci]) return; const d = Math.abs(f - y); if (d < bd) { bd = d; b = i; } }); return b; }
 function edges(ci) {
   const cx = ci % MW, cz = (ci / MW) | 0, c = cells[ci], out = [];
   const link = (nx, nz, from, up, down, rails) => {
     if (nx < 0 || nz < 0 || nx >= MW || nz >= MH) return;
-    const ni = nz * MW + nx, n = cells[ni];
-    if (n.stair) { // enter a stair only from its ends
-      const [sdx, sdz] = DIRS[n.stair.dir], lo = Math.abs(n.stair.y0 - from) < 0.5, hi = Math.abs(n.stair.y0 + H - from) < 0.5;
-      if ((lo && nx - sdx === cx && nz - sdz === cz) || (hi && nx + sdx === cx && nz + sdz === cz)) out.push(nid(ni, 0));
-      return;
-    }
-    floors[ni].forEach((g, gi) => { if (g <= from + up && g >= from - down && !(rails && n.rails[rails] > g + 0.3)) out.push(nid(ni, gi)); });
+    const ni = nz * MW + nx, n = cells[ni], nsi = stairIdx[ni];
+    floors[ni].forEach((g, gi) => {
+      if (gi === nsi) { // enter a stair only from its ends
+        const [sdx, sdz] = DIRS[n.stair.dir], lo = Math.abs(n.stair.y0 - from) < 0.5, hi = Math.abs(n.stair.y0 + H - from) < 0.5;
+        if ((lo && nx - sdx === cx && nz - sdz === cz) || (hi && nx + sdx === cx && nz + sdz === cz)) out.push(nid(ni, gi));
+        return;
+      }
+      if (g > from + up || g < from - down || (rails !== undefined && railBlocks(n.rails[rails], g))) return;
+      if (g < from - 0.3 && n.s.some((s) => covers(s, nx, nz) && s.y0 < from + 0.1 && s.y1 > g + 0.05)) return; // a drop must not pass through a floor
+      out.push(nid(ni, gi));
+    });
   };
-  if (c.stair) {
-    const [dx, dz] = DIRS[c.stair.dir];
-    link(cx - dx, cz - dz, c.stair.y0, 0.5, 0.5); link(cx + dx, cz + dz, c.stair.y0 + H, 0.5, 0.5);
-    return [[0, out]];
-  }
   return floors[ci].map((f, fi) => {
     out.length = 0;
+    if (fi === stairIdx[ci]) {
+      const [dx, dz] = DIRS[c.stair.dir];
+      link(cx - dx, cz - dz, c.stair.y0, 0.5, 0.5); link(cx + dx, cz + dz, c.stair.y0 + H, 0.5, 0.5);
+      return [fi, out.slice()];
+    }
     if (c.ladder) { const o = c.ladder.y0 === f ? c.ladder.y1 : c.ladder.y1 === f ? c.ladder.y0 : null; if (o !== null) { const i = floors[ci].indexOf(o); if (i >= 0) out.push(nid(ci, i)); } }
-    D4.forEach(([dx, dz], d) => { if (c.rails[d] > f + 0.3) return; link(cx + dx, cz + dz, f, 1.35, 3.0, (d + 2) % 4); });
+    D4.forEach(([dx, dz], d) => { if (railBlocks(c.rails[d], f)) return; link(cx + dx, cz + dz, f, 1.35, 3.0, (d + 2) % 4); });
     // diagonals only across open, level corners
     for (const [dx, dz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
-      const ok = (ax, az) => ax >= 0 && az >= 0 && ax < MW && az < MH && !cells[az * MW + ax].stair && floors[az * MW + ax].some((g) => Math.abs(g - f) < 0.3) && !Object.keys(cells[az * MW + ax].rails).length && !Object.keys(c.rails).length;
-      if (ok(cx + dx, cz) && ok(cx, cz + dz) && ok(cx + dx, cz + dz)) { const ni = (cz + dz) * MW + cx + dx; floors[ni].forEach((g, gi) => { if (Math.abs(g - f) < 0.3) out.push(nid(ni, gi)); }); }
+      const ok = (ax, az) => ax >= 0 && az >= 0 && ax < MW && az < MH && floors[az * MW + ax].some((g, gi) => gi !== stairIdx[az * MW + ax] && Math.abs(g - f) < 0.3) && !Object.keys(cells[az * MW + ax].rails).length && !Object.keys(c.rails).length;
+      if (ok(cx + dx, cz) && ok(cx, cz + dz) && ok(cx + dx, cz + dz)) { const ni = (cz + dz) * MW + cx + dx; floors[ni].forEach((g, gi) => { if (gi !== stairIdx[ni] && Math.abs(g - f) < 0.3) out.push(nid(ni, gi)); }); }
     }
     return [fi, out.slice()];
   });
@@ -278,9 +325,10 @@ export const nodeCount = ADJ.filter(Boolean).length;
 export function nodeAt(x, y, z) {
   y = +y || 0;
   const cx = Math.max(0, Math.min(MW - 1, toCx(x))), cz = Math.max(0, Math.min(MH - 1, toCz(z))), ci = cz * MW + cx;
-  const fi = cells[ci].stair ? 0 : nearestFloor(ci, y); return fi < 0 ? -1 : nid(ci, fi);
+  const c = cells[ci], si = stairIdx[ci];
+  const fi = si >= 0 && y > c.stair.y0 - 0.5 ? si : nearestFloor(ci, y); return fi < 0 ? -1 : nid(ci, fi);
 }
-const nodePos = (n) => { const ci = (n / NODE) | 0, fi = n % NODE, c = cells[ci]; return { x: cellX(ci % MW), y: c.stair ? c.stair.y0 + H / 2 : floors[ci][fi], z: cellZ((ci / MW) | 0), stair: !!c.stair }; };
+const nodePos = (n) => { const ci = (n / NODE) | 0, fi = n % NODE; return { x: cellX(ci % MW), y: floors[ci][fi], z: cellZ((ci / MW) | 0), stair: fi === stairIdx[ci] }; };
 const prev = new Int32Array(ADJ.length);
 export function findPath(x, y, z, gx, gy, gz) {
   const s = nodeAt(x, y, z), g = nodeAt(gx, gy, gz);
