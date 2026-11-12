@@ -8,7 +8,9 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
-import * as M from './map.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { compile } from './map.js';
+import { MAPS, mapById } from './maps/index.js';
 
 /* =====================================================================
    COLDLINE — browser team shooter. One player hosts (their browser runs
@@ -21,7 +23,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const r2 = (v) => Math.round(v * 100) / 100;
 
 /* ------------------------------ map ------------------------------ */
-const { MW, MH, CS, SPAWNS, BASE, cellX, cellZ, toCx, toCz, rayMap, los } = M;
+let M = null; // the compiled map of the current match (see loadMap)
 
 /* ---------------------------- weapons ---------------------------- */
 const WPN = [
@@ -77,12 +79,13 @@ const toHost = (m) => { if (Net.isHost) Host.onMsg(1, m); else if (Net.hostConn 
    HOST — authoritative match state, objectives, bots
    ===================================================================== */
 const Host = {
-  on: false, players: new Map(), mode: 'dm', scores: [0, 0, 0], time: 0, phase: 'live', phaseT: 0, flags: [], seq: 0, snapAcc: 0, last: 0,
+  on: false, players: new Map(), mode: 'dm', map: 'campus', scores: [0, 0, 0], time: 0, phase: 'live', phaseT: 0, flags: [], seq: 0, snapAcc: 0, last: 0,
   nextId: 2, nextBot: 100, clock: 0, roundAge: 0,
   send(id, m) { if (id === 1) Client.onMsg(m); else { const c = Net.conns.get(id); if (c && c.open) c.send(m); } },
   all(m) { for (const c of Net.conns.values()) if (c.open) c.send(m); Client.onMsg(m); },
   say(text, team = 0) { this.all({ t: 'msg', text, team }); },
-  start(mode, bots, name) {
+  start(mode, bots, name, map) {
+    this.map = mapById(map).id; loadMap(this.map);
     this.on = true; this.mode = mode; this.players.clear();
     this.addPlayer(1, name, false);
     for (let i = 0; i < bots; i++) this.addPlayer(this.nextBot++, BOT_NAMES[i % BOT_NAMES.length], true);
@@ -98,7 +101,7 @@ const Host = {
     const p = { id, name: String(name || 'Player').slice(0, 14), team: this.pickTeam(), bot, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, cr: false, hp: 100, alive: false, k: 0, d: 0, w: 0,
       respawnAt: 0, ai: { path: null, pi: 0, goalT: 0, think: Math.random() * 0.25, target: null, react: 0, next: 0, burst: 0 } };
     this.players.set(id, p);
-    if (!bot) this.send(id, { t: 'welcome', id, mode: this.mode, code: Net.code });
+    if (!bot) this.send(id, { t: 'welcome', id, mode: this.mode, map: this.map, code: Net.code });
     this.roster();
     if (this.on) {
       if (this.mode === 'inf' && this.phase === 'live' && this.roundAge > 15) { p.respawnAt = Infinity; this.send(id, { t: 'msg', text: 'You will deploy next round' }); }
@@ -109,7 +112,7 @@ const Host = {
   },
   removePlayer(id) { const p = this.players.get(id); if (!p) return; this.dropFlags(p); this.players.delete(id); this.roster(); this.say(p.name + ' left'); },
   spawn(p) {
-    let pts = p.team ? SPAWNS[p.team] : SPAWNS.all, best = pts[(Math.random() * pts.length) | 0];
+    let pts = p.team ? M.SPAWNS[p.team] : M.SPAWNS.all, best = pts[(Math.random() * pts.length) | 0];
     if (!p.team) { // deathmatch: prefer points far from everyone else
       let bs = -1;
       for (const s of pts) { let m = 1e9; for (const o of this.players.values()) if (o.alive && o !== p) m = Math.min(m, Math.hypot(o.x - s.x, o.z - s.z)); m += Math.random() * 8; if (m > bs) { bs = m; best = s; } }
@@ -119,7 +122,7 @@ const Host = {
     this.all({ t: 'spawn', id: p.id, x: r2(p.x), y: r2(p.y), z: r2(p.z), yaw: r2(p.yaw) });
   },
   setupFlags() {
-    const mk = (team, isCase) => ({ team, s: 0, x: BASE[team].x, y: 0, z: BASE[team].z, c: 0, dt: 0, isCase });
+    const mk = (team, isCase) => ({ team, s: 0, x: M.BASE[team].x, y: 0, z: M.BASE[team].z, c: 0, dt: 0, isCase });
     this.flags = this.mode === 'ctf' ? [mk(1), mk(2)] : this.mode === 'inf' ? [mk(1, true)] : [];
   },
   resetMatch() { this.scores = [0, 0, 0]; for (const p of this.players.values()) { p.k = 0; p.d = 0; } this.newRound(); this.say(MODE_NAME[this.mode] + ' — go'); },
@@ -160,8 +163,17 @@ const Host = {
     if (!p) return;
     if (m.t === 'in') { if (p.alive) { p.x = +m.x || 0; p.y = +m.y || 0; p.z = +m.z || 0; p.yaw = +m.yaw || 0; p.pitch = +m.pitch || 0; p.cr = !!m.cr; p.w = m.w | 0; } }
     else if (m.t === 'fire') { if (p.alive) { const msg = { t: 'fire', id, w: m.w | 0, es: m.es }; for (const [cid, c] of Net.conns) if (cid !== id && c.open) c.send(msg); if (id !== 1) Client.onMsg(msg); } }
-    else if (m.t === 'hit') { if (p.alive) { const w = WPN[m.w | 0] || WPN[0]; this.damage(m.id, id, w.dmg * clamp(m.n | 0, 1, w.pellets || 1) * (m.hs ? 2 : 1), m.hs, m.w | 0); } }
+    else if (m.t === 'hit') { if (p.alive && this.canHit(p, this.players.get(m.id), m.o)) { const w = WPN[m.w | 0] || WPN[0]; this.damage(m.id, id, w.dmg * clamp(m.n | 0, 1, w.pellets || 1) * (m.hs ? 2 : 1), m.hs, m.w | 0); } }
     else if (m.t === 'team') { if (this.mode !== 'dm') { if (p.alive) this.kill(p, null, 0, 0); p.team = 3 - p.team; this.roster(); this.say(p.name + ' switched to ' + TEAM_NAME[p.team]); } }
+  },
+  // a hit counts only if the victim is visible from the shooter's eye (which must be near the shooter's known position)
+  canHit(a, v, o) {
+    if (!v || !v.alive) return false;
+    let ex = a.x, ey = a.y + (a.cr ? 1.05 : 1.62), ez = a.z;
+    if (o && o.length === 3 && Math.hypot(o[0] - ex, o[1] - ey, o[2] - ez) < 1.3) { ex = +o[0]; ey = +o[1]; ez = +o[2]; }
+    const h = v.cr ? 1.25 : 1.8;
+    for (const f of [0.92, 0.55, 0.15]) for (const [dx, dz] of [[0, 0], [0.25, 0], [-0.25, 0], [0, 0.25], [0, -0.25]]) if (M.los(ex, ey, ez, v.x + dx, v.y + h * f, v.z + dz)) return true;
+    return false;
   },
   tickFlags(dt) {
     for (const f of this.flags) {
@@ -169,37 +181,37 @@ const Host = {
         const c = this.players.get(f.c);
         if (!c || !c.alive) { f.s = 2; f.c = 0; f.dt = 25; continue; }
         f.x = c.x; f.y = c.y; f.z = c.z;
-        if (f.isCase) { if (Math.hypot(c.x - BASE[2].x, c.z - BASE[2].z) < 2.2) { this.roundWin(2, 'case extracted'); return; } }
+        if (f.isCase) { if (Math.hypot(c.x - M.BASE[2].x, c.z - M.BASE[2].z) < 2.2) { this.roundWin(2, 'case extracted'); return; } }
         else {
           const own = this.flags.find((o) => o.team === c.team);
-          if (own.s === 0 && Math.hypot(c.x - BASE[c.team].x, c.z - BASE[c.team].z) < 2) {
-            this.scores[c.team]++; f.s = 0; f.c = 0; f.x = BASE[f.team].x; f.y = 0; f.z = BASE[f.team].z;
+          if (own.s === 0 && Math.hypot(c.x - M.BASE[c.team].x, c.z - M.BASE[c.team].z) < 2) {
+            this.scores[c.team]++; f.s = 0; f.c = 0; f.x = M.BASE[f.team].x; f.y = 0; f.z = M.BASE[f.team].z;
             this.say(c.name + ' captured the ' + TEAM_NAME[f.team] + ' flag', c.team);
             if (this.scores[c.team] >= CFG.ctf.limit) { this.endMatch(TEAM_NAME[c.team] + ' team wins the match'); return; }
           }
         }
         continue;
       }
-      if (f.s === 2 && !f.isCase) { f.dt -= dt; if (f.dt <= 0) { f.s = 0; f.x = BASE[f.team].x; f.y = 0; f.z = BASE[f.team].z; this.say(TEAM_NAME[f.team] + ' flag returned'); continue; } }
+      if (f.s === 2 && !f.isCase) { f.dt -= dt; if (f.dt <= 0) { f.s = 0; f.x = M.BASE[f.team].x; f.y = 0; f.z = M.BASE[f.team].z; this.say(TEAM_NAME[f.team] + ' flag returned'); continue; } }
       for (const p of this.players.values()) {
         if (!p.alive || Math.hypot(p.x - f.x, p.z - f.z) > 1.5 || Math.abs(p.y - f.y) > 2) continue;
         if (p.team !== f.team) { f.s = 1; f.c = p.id; this.say(p.name + (f.isCase ? ' has the case' : ' took the ' + TEAM_NAME[f.team] + ' flag'), p.team); break; }
-        else if (f.s === 2 && !f.isCase) { f.s = 0; f.x = BASE[f.team].x; f.y = 0; f.z = BASE[f.team].z; this.say(p.name + ' returned the ' + TEAM_NAME[f.team] + ' flag', p.team); break; }
+        else if (f.s === 2 && !f.isCase) { f.s = 0; f.x = M.BASE[f.team].x; f.y = 0; f.z = M.BASE[f.team].z; this.say(p.name + ' returned the ' + TEAM_NAME[f.team] + ' flag', p.team); break; }
       }
     }
   },
   botGoal(b) {
-    const rnd = () => SPAWNS.all[(Math.random() * SPAWNS.all.length) | 0];
+    const rnd = () => M.SPAWNS.all[(Math.random() * M.SPAWNS.all.length) | 0];
     if (this.mode === 'ctf') {
       const mine = this.flags.find((f) => f.team === b.team), theirs = this.flags.find((f) => f.team !== b.team);
-      if (theirs.s === 1 && theirs.c === b.id) return BASE[b.team];
+      if (theirs.s === 1 && theirs.c === b.id) return M.BASE[b.team];
       if (mine.s === 2 && Math.random() < 0.6) return mine;
-      if (theirs.s === 1) return Math.random() < 0.5 ? BASE[b.team] : rnd();
+      if (theirs.s === 1) return Math.random() < 0.5 ? M.BASE[b.team] : rnd();
       return Math.random() < 0.75 ? theirs : rnd();
     }
     if (this.mode === 'inf') {
       const f = this.flags[0];
-      if (b.team === 2) return f.s === 1 && f.c === b.id ? BASE[2] : f.s === 1 ? BASE[2] : f;
+      if (b.team === 2) return f.s === 1 && f.c === b.id ? M.BASE[2] : f.s === 1 ? M.BASE[2] : f;
       if (f.s !== 0) return f;
       return { x: f.x + (Math.random() - 0.5) * 30, z: f.z + (Math.random() - 0.5) * 30 };
     }
@@ -216,14 +228,14 @@ const Host = {
         const d = Math.hypot(e.x - b.x, e.z - b.z); if (d >= bd) continue;
         let da = Math.atan2(-(e.x - b.x), -(e.z - b.z)) - b.yaw; da = Math.atan2(Math.sin(da), Math.cos(da));
         if (d > 8 && Math.abs(da) > 1.3) continue;
-        if (los(b.x, b.y + 1.5, b.z, e.x, e.y + (e.cr ? 0.8 : 1.2), e.z)) { best = e; bd = d; }
+        if (M.los(b.x, b.y + 1.5, b.z, e.x, e.y + (e.cr ? 0.8 : 1.2), e.z)) { best = e; bd = d; }
       }
       if (best !== ai.target) { ai.target = best; ai.react = 0.3 + Math.random() * 0.35; ai.burst = 0; }
       ai.goalT -= 0.25;
       if (!ai.path || ai.pi >= ai.path.length || ai.goalT <= 0) {
         const g = this.botGoal(b);
         ai.path = M.findPath(b.x, b.y, b.z, g.x, g.y, g.z); ai.pi = 0; ai.goalT = 5 + Math.random() * 5;
-        if (!ai.path) { const s = SPAWNS.all[(Math.random() * SPAWNS.all.length) | 0]; ai.path = M.findPath(b.x, b.y, b.z, s.x, s.y, s.z) || []; }
+        if (!ai.path) { const s = M.SPAWNS.all[(Math.random() * M.SPAWNS.all.length) | 0]; ai.path = M.findPath(b.x, b.y, b.z, s.x, s.y, s.z) || []; }
       }
     }
     const tgt = ai.target && ai.target.alive ? ai.target : null;
@@ -244,7 +256,8 @@ const Host = {
       const d = Math.hypot(tgt.x - b.x, tgt.z - b.z), ty = tgt.y + (tgt.cr ? 0.75 : 1.15);
       b.pitch = Math.atan2(ty - (b.y + 1.5), d);
       ai.react -= dt;
-      if (ai.react <= 0 && this.clock >= ai.next) {
+      if (ai.react <= 0 && this.clock >= ai.next && !M.los(b.x, b.y + 1.5, b.z, tgt.x, ty, tgt.z)) { ai.target = null; ai.next = this.clock + 0.2; }
+      else if (ai.react <= 0 && this.clock >= ai.next) {
         ai.next = this.clock + 0.12; if (++ai.burst >= 4 + ((Math.random() * 3) | 0)) { ai.burst = 0; ai.next = this.clock + 0.45 + Math.random() * 0.6; }
         const hitP = clamp(0.5 - d * 0.006, 0.1, 0.5), hit = Math.random() < hitP;
         const miss = hit ? 0.1 : 0.9, ex = tgt.x + (Math.random() - 0.5) * miss * 2, ey = ty + (Math.random() - 0.5) * miss, ez = tgt.z + (Math.random() - 0.5) * miss * 2;
@@ -293,24 +306,31 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(74, 1, 0.05, 1200);
 camera.rotation.order = 'YXZ'; scene.add(camera);
 
-// sky + sun + image-based lighting
+// sky + sun + image-based lighting; the numbers come from the map theme (applyTheme)
 const sky = new Sky(); sky.scale.setScalar(1000); scene.add(sky);
-const sunDir = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(40), THREE.MathUtils.degToRad(150));
-Object.assign(sky.material.uniforms.turbidity, { value: 5 }); sky.material.uniforms.rayleigh.value = 1.4;
-sky.material.uniforms.mieCoefficient.value = 0.006; sky.material.uniforms.mieDirectionalG.value = 0.82;
-sky.material.uniforms.sunPosition.value.copy(sunDir);
-{ // image-based lighting from a copy of the sky without the sun's glare, so white interiors are not blown out
-  const pm = new THREE.PMREMGenerator(renderer), s2 = new THREE.Scene(), sk2 = new Sky(); sk2.scale.setScalar(1000); s2.add(sk2);
-  const u = sk2.material.uniforms; u.turbidity.value = 8; u.rayleigh.value = 1.0; u.mieCoefficient.value = 0.0005; u.mieDirectionalG.value = 0.3; u.sunPosition.value.copy(sunDir);
-  scene.environment = pm.fromScene(s2, 0, 0.1, 1100).texture; scene.environmentIntensity = 0.12; pm.dispose();
-}
-scene.fog = new THREE.FogExp2('#b4bac0', 0.0028);
+const sunDir = new THREE.Vector3(0, 1, 0);
 const sun = new THREE.DirectionalLight('#ffe2b8', 2.6);
-sun.position.copy(sunDir).multiplyScalar(90); sun.castShadow = true;
-sun.shadow.mapSize.set(4096, 4096);
+sun.castShadow = true; sun.shadow.mapSize.set(4096, 4096);
 Object.assign(sun.shadow.camera, { left: -62, right: 62, top: 62, bottom: -62, near: 10, far: 200 });
 sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.04;
-scene.add(sun, new THREE.HemisphereLight('#cfd6de', '#6a635a', 0.3));
+const hemi = new THREE.HemisphereLight('#cfd6de', '#6a635a', 0.3);
+scene.add(sun, hemi);
+scene.fog = new THREE.FogExp2('#b4bac0', 0.0028);
+function applyTheme(t) {
+  const [el, az] = t.sun || [40, 150];
+  sunDir.setFromSphericalCoords(1, THREE.MathUtils.degToRad(el), THREE.MathUtils.degToRad(az));
+  const [turb, ray] = t.sky || [5, 1.4], u = sky.material.uniforms;
+  u.turbidity.value = turb; u.rayleigh.value = ray; u.mieCoefficient.value = 0.006; u.mieDirectionalG.value = 0.82; u.sunPosition.value.copy(sunDir);
+  sun.color.set(t.sunColor || '#ffe2b8'); sun.intensity = t.sunI ?? 2.6; sun.position.copy(sunDir).multiplyScalar(90);
+  const [hs, hg, hi] = t.hemi || ['#cfd6de', '#6a635a', 0.3]; hemi.color.set(hs); hemi.groundColor.set(hg); hemi.intensity = hi;
+  const [fc, fd] = t.fog || ['#b4bac0', 0.0028]; scene.fog.color.set(fc); scene.fog.density = fd;
+  renderer.toneMappingExposure = t.exposure ?? 0.55;
+  // image-based lighting from a copy of the sky without the sun's glare, so white interiors are not blown out
+  const pm = new THREE.PMREMGenerator(renderer), s2 = new THREE.Scene(), sk2 = new Sky(); sk2.scale.setScalar(1000); s2.add(sk2);
+  const u2 = sk2.material.uniforms; u2.turbidity.value = 8; u2.rayleigh.value = 1.0; u2.mieCoefficient.value = 0.0005; u2.mieDirectionalG.value = 0.3; u2.sunPosition.value.copy(sunDir);
+  if (scene.environment) scene.environment.dispose();
+  scene.environment = pm.fromScene(s2, 0, 0.1, 1100).texture; scene.environmentIntensity = t.env ?? 0.12; pm.dispose();
+}
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
@@ -329,30 +349,38 @@ window.addEventListener('resize', resize); resize();
 /* ---------- materials: photo-scanned CC0 PBR sets (assets/tex, from ambientcg.com) ---------- */
 function hash2(x, y) { let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
 const TL = new THREE.TextureLoader();
-const NO_AO = new Set(['roof', 'plaster', 'asphalt', 'marble', 'steel', 'metal']);
+const NO_AO = new Set(['roof', 'plaster', 'asphalt', 'marble', 'steel', 'metal', 'rooftile', 'stucco', 'wood', 'rust', 'concrete3', 'facade', 'tiles']);
 function pbr(name, o = {}, repeat = 1) {
   const load = (suf, srgb) => { const t = TL.load(`assets/tex/${name}_${suf}.jpg`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8; t.repeat.set(repeat, repeat); t.channel = 0; if (srgb) t.colorSpace = THREE.SRGBColorSpace; return t; };
   const m = new THREE.MeshStandardMaterial({ map: load('c', true), normalMap: load('n'), roughnessMap: load('r'), roughness: 1, metalness: 0, ...o });
   if (!NO_AO.has(name)) { m.aoMap = load('ao'); m.aoMapIntensity = 0.7; }
   return m;
 }
-const P = {}; const mp = (n, o) => P[n] || (P[n] = pbr(n, o));
-const c2 = () => mp('concrete2');
-const MATS = {
-  concrete: { m: mp('concrete'), ts: 2.5 }, concrete2: { m: c2(), ts: 2.5 }, brick: { m: mp('brick'), ts: 2.5 }, plaster: { m: mp('plaster', { color: '#c9c4bb' }), ts: 2.5 },
-  // slabs: [+x, -x, top, bottom, +z, -z]
-  floor: { m: [c2(), c2(), mp('carpet'), mp('ceiling'), c2(), c2()], ts: 2.5 },
-  deck: { m: [c2(), c2(), mp('paving2'), c2(), c2(), c2()], ts: 2.5 },
-  roof: { m: [c2(), c2(), mp('roof'), mp('ceiling'), c2(), c2()], ts: 2.5 },
-  marble: { m: mp('marble'), ts: 2.5 }, step: { m: c2(), ts: 2.5 }, barrier: { m: c2(), ts: 2.5 }, planter: { m: c2(), ts: 2.5 },
-  glass: { m: new THREE.MeshPhysicalMaterial({ color: '#7fa3b4', transparent: true, opacity: 0.22, roughness: 0.03, metalness: 0.1, envMapIntensity: 2.2, side: THREE.DoubleSide, depthWrite: false }), ts: 1 },
-  container: { m: mp('corrugated', { metalness: 0.35 }), ts: 2.5, tint: ['#3d6e8f', '#8c4a3a', '#56704a', '#b08a3c', '#5b5f66'] },
-  crate: { m: mp('planks'), ts: 1.25 }, desk: { m: mp('planks'), ts: 1.25 },
-  grate: { m: mp('steel', { metalness: 0.8, roughness: 0.7 }), ts: 1.25 },
-  metal: { m: mp('metal', { color: '#6a6f74', metalness: 0.9, roughness: 0.55 }), ts: 1 },
-  lamp: { m: new THREE.MeshStandardMaterial({ color: '#fff3dc', emissive: '#ffe9c4', emissiveIntensity: 3.5, roughness: 0.6 }), ts: 1 },
+const P = {}; const mp = (n, o, rep = 1) => P[n + '@' + rep] || (P[n + '@' + rep] = pbr(n, o, rep));
+const TINT = { plaster: { color: '#c9c4bb' }, stucco: { color: '#c4b59a' }, metal: { color: '#6a6f74', metalness: 0.9, roughness: 0.55 }, steel: { metalness: 0.8, roughness: 0.7 }, corrugated: { metalness: 0.35 }, rust: { metalness: 0.5, roughness: 0.8 } };
+const tex = (n) => mp(n, TINT[n]);
+// slab kinds: [+x, -x, top, bottom, +z, -z]
+const COMPOSITE = {
+  floor: ['concrete2', 'concrete2', 'carpet', 'ceiling', 'concrete2', 'concrete2'], floor2: ['stucco', 'stucco', 'planks2', 'wood', 'stucco', 'stucco'], floor3: ['concrete2', 'concrete2', 'concrete3', 'concrete', 'concrete2', 'concrete2'],
+  floor4: ['stone', 'stone', 'tiles', 'wood', 'stone', 'stone'],
+  deck: ['concrete2', 'concrete2', 'paving2', 'concrete2', 'concrete2', 'concrete2'], deck2: ['steel', 'steel', 'steel', 'steel', 'steel', 'steel'], deck3: ['wood', 'wood', 'planks2', 'wood', 'wood', 'wood'],
+  roof: ['concrete2', 'concrete2', 'roof', 'ceiling', 'concrete2', 'concrete2'], roof2: ['stucco', 'stucco', 'rooftile', 'wood', 'stucco', 'stucco'], roof3: ['concrete2', 'concrete2', 'snow', 'concrete', 'concrete2', 'concrete2'],
 };
-for (const l of M.lamps) { const pl = new THREE.PointLight('#ffe6c4', 10, 12, 1.7); pl.position.set(l.x, l.y - 0.3, l.z); scene.add(pl); }
+const SPECIAL = {
+  glass: () => ({ m: new THREE.MeshPhysicalMaterial({ color: '#7fa3b4', transparent: true, opacity: 0.22, roughness: 0.03, metalness: 0.1, envMapIntensity: 2.2, side: THREE.DoubleSide, depthWrite: false }), ts: 1 }),
+  container: () => ({ m: tex('corrugated'), ts: 2.5, tint: ['#3d6e8f', '#8c4a3a', '#56704a', '#b08a3c', '#5b5f66'] }),
+  crate: () => ({ m: tex('planks'), ts: 1.25 }), desk: () => ({ m: tex('planks'), ts: 1.25 }), grate: () => ({ m: tex('steel'), ts: 1.25 }),
+  step: () => ({ m: tex('concrete2'), ts: 2.5 }), barrier: () => ({ m: tex('concrete2'), ts: 2.5 }), barrier2: () => ({ m: tex('concrete3'), ts: 2.5 }), planter: () => ({ m: tex('concrete2'), ts: 2.5 }),
+  metal: () => ({ m: tex('metal'), ts: 1 }), hvac: () => ({ m: tex('steel'), ts: 1.25, tint: ['#8d9399', '#6e7479', '#9aa0a5', '#7b8286'] }),
+  lamp: () => ({ m: new THREE.MeshStandardMaterial({ color: '#fff3dc', emissive: '#ffe9c4', emissiveIntensity: 3.5, roughness: 0.6 }), ts: 1 }),
+  awning: () => ({ m: new THREE.MeshStandardMaterial({ color: '#8a3b2f', roughness: 0.95, side: THREE.DoubleSide }), ts: 1, tint: ['#8a3b2f', '#2f5a7a', '#6d6a3a', '#7a2f4a'] }),
+};
+const MATS = {};
+function matFor(kind) {
+  if (MATS[kind]) return MATS[kind];
+  const k = SPECIAL[kind] ? SPECIAL[kind]() : COMPOSITE[kind] ? { m: COMPOSITE[kind].map(tex), ts: 2.5 } : { m: tex(kind), ts: 2.5 };
+  return (MATS[kind] = k);
+}
 
 /* ---------- build the level ---------- */
 // unit box whose UVs repeat once every `ts` metres on every face, so one texture serves every box size
@@ -361,33 +389,47 @@ function boxGeo(sx, sy, sz, ts) {
   for (let f = 0; f < 6; f++) for (let i = 0; i < 4; i++) { const j = f * 4 + i; uv.setXY(j, uv.getX(j) * dims[f][0] / ts, uv.getY(j) * dims[f][1] / ts); }
   return g;
 }
-{
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(MW * CS, MH * CS), pbr('paving', {}, MW * CS / 2.5));
-  floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
-  const outer = new THREE.Mesh(new THREE.PlaneGeometry(900, 900), pbr('asphalt', {}, 300));
-  outer.rotation.x = -Math.PI / 2; outer.position.y = -0.05; outer.receiveShadow = true; scene.add(outer);
+let world = null;
+function buildWorld() {
+  if (world) { scene.remove(world); world.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); }
+  world = new THREE.Group(); scene.add(world);
+  const T = M.theme, { MW, MH, CS } = M, d = new THREE.Object3D(), col = new THREE.Color();
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(MW * CS, MH * CS), mp(T.ground || 'paving', TINT[T.ground], MW * CS / 2.5));
+  floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; world.add(floor);
+  const outer = new THREE.Mesh(new THREE.PlaneGeometry(900, 900), mp(T.outer || 'asphalt', TINT[T.outer], 300));
+  outer.rotation.x = -Math.PI / 2; outer.position.y = T.outerY ?? -0.05; outer.receiveShadow = true; world.add(outer);
+  if (T.outerY < -1) { // a building under a rooftop map: facade walls from the map edge down to the street
+    const h = -T.outerY, fac = new THREE.Mesh(boxGeo(MW * CS + 0.2, h, MH * CS + 0.2, 3), mp('facade', { color: '#9aa0a8', roughness: 0.6, metalness: 0.2 })); fac.position.y = -h / 2 - 0.01; world.add(fac);
+  }
   // group identical boxes (kind + size) into instanced meshes
   const groups = new Map();
   for (const b of M.boxes) { const key = `${b.kind}|${b.sx.toFixed(2)}|${b.sy.toFixed(2)}|${b.sz.toFixed(2)}`; (groups.get(key) || groups.set(key, []).get(key)).push(b); }
-  const d = new THREE.Object3D(), col = new THREE.Color();
   for (const list of groups.values()) {
-    const b0 = list[0], k = MATS[b0.kind] || MATS.concrete;
+    const b0 = list[0], k = matFor(b0.kind);
     const im = new THREE.InstancedMesh(boxGeo(b0.sx, b0.sy, b0.sz, k.ts), k.m, list.length);
     im.castShadow = im.receiveShadow = b0.kind !== 'glass';
     list.forEach((b, i) => {
       d.position.set(b.x, b.y, b.z); d.updateMatrix(); im.setMatrixAt(i, d.matrix);
       if (k.tint) im.setColorAt(i, col.set(k.tint[(hash2(Math.round(b.x * 7), Math.round(b.z * 7)) * k.tint.length) | 0]));
     });
-    scene.add(im);
+    world.add(im);
   }
-  // distant skyline blocks so the campus does not float in emptiness
-  const far = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: '#5d6066', roughness: 0.95 }), 46);
-  for (let i = 0; i < 46; i++) {
-    const a = i / 46 * Math.PI * 2 + hash2(i, 5) * 0.1, r = 85 + hash2(i, 1) * 60, w = 10 + hash2(i, 2) * 22, h = 8 + hash2(i, 3) * 30;
-    d.position.set(Math.cos(a) * r, h / 2, Math.sin(a) * r); d.rotation.set(0, a, 0); d.scale.set(w, h, 10 + hash2(i, 4) * 16); d.updateMatrix(); far.setMatrixAt(i, d.matrix);
-    const v = 0.55 + hash2(i, 9) * 0.4; far.setColorAt(i, col.setRGB(v, v * 0.98, v * 0.95));
+  for (const l of M.lamps) { const pl = new THREE.PointLight('#ffe6c4', 10, 12, 1.7); pl.position.set(l.x, l.y - 0.3, l.z); world.add(pl); }
+  if (T.skyline === 'city') { // distant blocks so the map does not float in emptiness
+    const geos = [];
+    for (let i = 0; i < 46; i++) {
+      const a = i / 46 * Math.PI * 2 + hash2(i, 5) * 0.1, r = 85 + hash2(i, 1) * 60, w = 10 + hash2(i, 2) * 22, h = 8 + hash2(i, 3) * 30, g = boxGeo(w, h, 10 + hash2(i, 4) * 16, 3);
+      d.position.set(Math.cos(a) * r, h / 2, Math.sin(a) * r); d.rotation.set(0, a, 0); d.scale.set(1, 1, 1); d.updateMatrix(); g.applyMatrix4(d.matrix); geos.push(g);
+    }
+    world.add(new THREE.Mesh(mergeGeometries(geos), mp('facade', { color: '#c3c8ce', roughness: 0.7, metalness: 0.15 })));
+  } else if (T.skyline === 'hills') {
+    const im = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 7), new THREE.MeshStandardMaterial({ color: T.hillColor || '#55604c', roughness: 1 }), 28);
+    for (let i = 0; i < 28; i++) {
+      const a = i / 28 * Math.PI * 2 + hash2(i, 6) * 0.2, r = 150 + hash2(i, 1) * 90, w = 60 + hash2(i, 2) * 90, h = 18 + hash2(i, 3) * 40;
+      d.position.set(Math.cos(a) * r, h / 2 - 1, Math.sin(a) * r); d.rotation.set(0, hash2(i, 7) * 6, 0); d.scale.set(w, h, w); d.updateMatrix(); im.setMatrixAt(i, d.matrix);
+    }
+    world.add(im);
   }
-  scene.add(far);
 }
 
 /* ---------- objective markers ---------- */
@@ -397,7 +439,12 @@ function ringMesh(color) {
   disc.rotation.x = -Math.PI / 2; disc.position.y = 0.03; g.add(disc); g.userData.mat = disc.material; return g;
 }
 const baseMark = { 1: ringMesh(TEAM_COL[1]), 2: ringMesh(TEAM_COL[2]) };
-for (const t of [1, 2]) { baseMark[t].position.set(BASE[t].x, 0, BASE[t].z); scene.add(baseMark[t]); }
+for (const t of [1, 2]) scene.add(baseMark[t]);
+function loadMap(id) {
+  const def = mapById(id); if (M && M.id === def.id) return;
+  M = compile(def); applyTheme(M.theme); buildWorld();
+  for (const t of [1, 2]) baseMark[t].position.set(M.BASE[t].x, 0, M.BASE[t].z);
+}
 function flagMesh() {
   const g = new THREE.Group();
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 2.4, 8), new THREE.MeshStandardMaterial({ color: '#d0d0d0', metalness: 0.9, roughness: 0.3 })); pole.position.y = 1.2;
@@ -516,7 +563,7 @@ const Client = {
   id: 0, mode: 'dm', roster: new Map(), ents: new Map(), flags: [], scores: [0, 0, 0], time: 0, phase: 'live', lastSeq: 0, stats: new Map(),
   onMsg(m) {
     switch (m.t) {
-      case 'welcome': this.id = m.id; this.mode = m.mode; this.lastSeq = 0; enterGame(m.code); break;
+      case 'welcome': this.id = m.id; this.mode = m.mode; this.lastSeq = 0; loadMap(m.map); enterGame(m.code); break;
       case 'roster': this.roster.clear(); for (const [id, name, team, bot] of m.list) this.roster.set(id, { name, team, bot }); this.syncEnts(); break;
       case 's': this.snap(m); break;
       case 'spawn': if (m.id === this.id) localSpawn(m); else { const e = this.ents.get(m.id); if (e) { e.x = e.tx = m.x; e.z = e.tz = m.z; e.y = e.ty = m.y || 0; } } break;
@@ -658,7 +705,7 @@ function fire(w) {
   for (let i = 0; i < (w.pellets || 1); i++) {
     const a = Math.random() * Math.PI * 2, rr = Math.sqrt(Math.random()) * spread;
     const d = _b.copy(_f).addScaledVector(_r, Math.cos(a) * rr).addScaledVector(_u, Math.sin(a) * rr).normalize(), dv = [d.x, d.y, d.z];
-    let best = rayMap(o[0], o[1], o[2], d.x, d.y, d.z, 140), hitE = null, hs = false;
+    let best = M.rayMap(o[0], o[1], o[2], d.x, d.y, d.z, 140), hitE = null, hs = false;
     for (const e of Client.ents.values()) {
       if (!e.alive || !Client.hostile(e.id)) continue;
       const h = e.cr ? 1.25 : 1.8;
@@ -670,7 +717,7 @@ function fire(w) {
     if (hitE) { const h = hits.get(hitE.id) || { n: 0, hs: false }; h.n++; h.hs = h.hs || hs; hits.set(hitE.id, h); }
   }
   toHost({ t: 'fire', w: me.w, es });
-  for (const [id, h] of hits) toHost({ t: 'hit', id, n: h.n, hs: h.hs ? 1 : 0, w: me.w });
+  for (const [id, h] of hits) toHost({ t: 'hit', id, n: h.n, hs: h.hs ? 1 : 0, w: me.w, o: [r2(o[0]), r2(o[1]), r2(o[2])] });
   if (hits.size) { const hm = $('#hit'); hm.style.transition = 'none'; hm.style.opacity = 1; hm.classList.toggle('hs', [...hits.values()].some((h) => h.hs)); requestAnimationFrame(() => { hm.style.transition = ''; hm.style.opacity = 0; }); sndBeep(1900, 0.04, 0.1); }
   me.pitch = clamp(me.pitch + w.kick * (0.7 + Math.random() * 0.6), -1.5, 1.5); me.yaw += (Math.random() - 0.5) * w.kick * 0.6;
   me.bloom = Math.min(0.03, me.bloom + 0.003); me.kickV = Math.min(0.09, me.kickV + w.kick * 1.6);
@@ -735,7 +782,7 @@ function updateHud(dt) {
     else { const f = C.flags[0]; obj = (myTeam === 2 ? 'Steal the case from the red ring and carry it to the green ring' : 'Stop Blue from extracting the case') + (f && f[0] === 1 ? ` — <b>${esc(C.name(f[4]))} has the case</b>` : ''); }
     obj = `<span class="t${myTeam}">You are ${TEAM_NAME[myTeam]}</span> · ` + obj;
   }
-  $('#score').innerHTML = score; $('#sub').textContent = MODE_NAME[C.mode] + ' · ' + fmtTime(C.time) + (C.phase !== 'live' ? ' · intermission' : ''); $('#obj').innerHTML = obj;
+  $('#score').innerHTML = score; $('#sub').textContent = MODE_NAME[C.mode] + ' · ' + M.name + ' · ' + fmtTime(C.time) + (C.phase !== 'live' ? ' · intermission' : ''); $('#obj').innerHTML = obj;
   baseMark[1].visible = baseMark[2].visible = C.mode !== 'dm';
   baseMark[2].userData.mat.color.set(C.mode === 'inf' ? '#6fdc6a' : TEAM_COL[2]);
   const showBoard = K.tab || C.phase === 'over'; $('#board').style.display = showBoard ? 'block' : 'none';
@@ -775,10 +822,12 @@ const status = (t) => { $('#status').textContent = t; };
 try { $('#name').value = localStorage.getItem('coldline-name') || ''; } catch (e) {}
 if (/^#[A-Za-z0-9]{5}$/.test(location.hash)) $('#code').value = location.hash.slice(1).toUpperCase();
 const myName = () => { const n = $('#name').value.trim() || 'Operator' + ((Math.random() * 90 + 10) | 0); try { localStorage.setItem('coldline-name', n); } catch (e) {} return n; };
+$('#map').innerHTML = MAPS.map((m) => `<option value="${m.id}">${m.name} — ${m.desc}</option>`).join('');
+$('#map').addEventListener('change', (e) => { if (!inGame) loadMap(e.target.value); });
 $('#modes').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; pickMode = b.dataset.m; document.querySelectorAll('#modes button').forEach((x) => x.classList.toggle('on', x === b)); });
 $('#createBtn').addEventListener('click', () => {
   audioInit(); status('Creating match…');
-  netHost(() => Host.start(pickMode, +$('#bots').value, myName()), status);
+  netHost(() => Host.start(pickMode, +$('#bots').value, myName(), $('#map').value), status);
 });
 function doJoin() {
   const code = $('#code').value.trim().toUpperCase(); if (code.length !== 5) { status('Enter the 5-character invite code.'); return; }
@@ -813,7 +862,8 @@ $('#copyBtn').addEventListener('click', () => {
 
 if (Q.has('low')) { $('#gfx').value = 'low'; $('#gfx').dispatchEvent(new Event('change')); }
 // ?test[&mode=ctf&bots=4&pos=x,y,z,yaw,pitch] — offline practice match (no matchmaking), also used for screenshots
-if (TEST) { Net.isHost = true; Net.code = 'TEST0'; Host.start(Q.get('mode') || 'dm', +(Q.get('bots') ?? 4), 'Tester'); }
+if (TEST) { Net.isHost = true; Net.code = 'TEST0'; Host.start(Q.get('mode') || 'dm', +(Q.get('bots') ?? 4), 'Tester', Q.get('map')); }
+else loadMap(MAPS[0].id);
 
 /* ---------- main loop ---------- */
 let last = performance.now(), sendAcc = 0, menuT = 0;
@@ -830,4 +880,4 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-window.__g = { Host, Client, Net, me, toHost, M, BASE, SPAWNS, toCx, toCz, WPN };
+window.__g = { Host, Client, Net, me, toHost, get M() { return M; }, WPN, loadMap };
