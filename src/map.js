@@ -26,7 +26,8 @@
      L  ladder (stack L in consecutive layers for a taller ladder)
      *  ceiling lamp hung from the layer above (no collision)
      S  team spawn (team by map half)   D  spawn usable in deathmatch
-     F  flag / case position
+     1 2  explicit red / blue spawn (for sym: 'none' maps)
+     F  flag / case position (red in sym: 'none' maps)   G  blue flag (sym: 'none' maps only)
    Anything but '.', a wall block or 'L' on a layer above ground also lays a slab,
    unless the cell below is a wall block.
    def.kinds remaps the material kind of a character, e.g. { '#': 'stone', '=': 'floor2' }.
@@ -40,6 +41,7 @@ const DIRS = { '^': [0, -1], 'v': [0, 1], '<': [-1, 0], '>': [1, 0] };
 const D4 = [[1, 0], [0, 1], [-1, 0], [0, -1]];
 const DEFAULT_KINDS = { '#': 'concrete', B: 'brick', p: 'plaster', W: 'wood', m: 'marble', c: 'crate', C: 'container', l: 'barrier', h: 'concrete', P: 'planter', d: 'desk', k: 'crate', o: 'concrete', '=': 'floor', r: 'deck', R: 'roof', w: 'brick', a: 'concrete', step: 'step', frame: 'metal', canopy: 'awning' };
 
+const R2 = (v) => Math.round(v * 100) / 100;
 export function compile(def) {
   const LAYERS = def.sym === 'none' ? def.layers : def.layers.map(mirror);
   const MW = LAYERS[0][0].length, MH = LAYERS[0].length, MAXY = LAYERS.length * H;
@@ -74,7 +76,7 @@ export function compile(def) {
       const ch = L[cz][cx], team = cz < MH / 2 ? 1 : 2, c = at(cx, cz);
       if (ch === '.') continue;
       if (FULL[ch]) { solid(cx, cz, 0, CS, 0, CS, y0, y0 + H, KIND[ch]); continue; }
-      if (k > 0 && ch !== 'L' && !FULL[chr(k - 1, cx, cz)]) solid(cx, cz, 0, CS, 0, CS, y0 - SLAB, y0, ch === 'r' ? KIND.r : ch === 'R' || ch === 'l' ? KIND.R : KIND['=']);
+      if (k > 0 && (ch !== 'L' || chr(k - 1, cx, cz) !== 'L') && !FULL[chr(k - 1, cx, cz)]) solid(cx, cz, 0, CS, 0, CS, y0 - SLAB, y0, ch === 'r' ? KIND.r : ch === 'R' || ch === 'l' ? KIND.R : KIND['=']);
       const m = CS * 0.5;
       if (ch === 'g') { // curtain wall: a thin pane with a spandrel band above and a sill below; blocks movement but not sight or shots
         c.s.push({ x0: cellX(cx) - CS / 2, x1: cellX(cx) + CS / 2, z0: cellZ(cz) - CS / 2, z1: cellZ(cz) + CS / 2, y0, y1: y0 + H, ghost: true });
@@ -114,10 +116,11 @@ export function compile(def) {
         }
       }
       else if (ch === '*') { lamps.push({ x: cellX(cx), y: y0 + H - 0.45, z: cellZ(cz) }); deco(cx, cz, m - 0.35, m + 0.35, m - 0.35, m + 0.35, y0 + H - 0.5, y0 + H - 0.42, 'lamp'); deco(cx, cz, m - 0.03, m + 0.03, m - 0.03, m + 0.03, y0 + H - 0.42, y0 + H, 'metal'); }
-      else if (ch === 'L') { if (c.ladder && Math.abs(c.ladder.y1 - y0) < 0.01) c.ladder.y1 = y0 + H; else c.ladder = { y0, y1: y0 + H }; }
-      else if (ch === 'S') { const p = { x: cellX(cx), y: y0, z: cellZ(cz) }; SPAWNS[team].push(p); SPAWNS.all.push(p); }
+      else if (ch === 'L') { if (c.ladder && Math.abs(c.ladder.y1 - y0) < 0.01) c.ladder.y1 = R2(y0 + H); else c.ladder = { y0: R2(y0), y1: R2(y0 + H) }; }
+      else if (ch === 'S' || ch === '1' || ch === '2') { const p = { x: cellX(cx), y: y0, z: cellZ(cz) }; SPAWNS[ch === 'S' ? team : +ch].push(p); SPAWNS.all.push(p); }
       else if (ch === 'D') SPAWNS.all.push({ x: cellX(cx), y: y0, z: cellZ(cz) });
-      else if (ch === 'F') BASE[team] = { x: cellX(cx), y: y0, z: cellZ(cz) };
+      else if (ch === 'F') BASE[def.sym === 'none' ? 1 : team] = { x: cellX(cx), y: y0, z: cellZ(cz) };
+      else if (ch === 'G') BASE[2] = { x: cellX(cx), y: y0, z: cellZ(cz) };
     }
   });
   if (!BASE[1] || !BASE[2]) throw new Error(`${def.name}: both halves need an F cell`);
@@ -244,7 +247,7 @@ export function compile(def) {
     const cand = [0]; for (const s of c.s) if (covers(s, cx, cz)) cand.push(s.y1);
     if (c.ladder) cand.push(c.ladder.y0, c.ladder.y1);
     for (const f of cand.sort((a, b) => a - b)) if (f < lim && clear(c, cx, cz, f) && !fs.some((g) => Math.abs(g - f) < 0.2)) fs.push(Math.round(f * 100) / 100);
-    if (c.ladder && !fs.includes(c.ladder.y1)) fs.push(c.ladder.y1);
+    if (c.ladder && !fs.some((f) => Math.abs(f - c.ladder.y1) < 0.05)) fs.push(c.ladder.y1);
     if (c.stair) fs.push(c.stair.y0 + H / 2);
     stairIdx.push(c.stair ? fs.length - 1 : -1);
     if (fs.length > NODE) throw new Error(`${def.name}: cell ${cx},${cz} has ${fs.length} floors`);
@@ -316,7 +319,7 @@ export function compile(def) {
         link(cx - dx, cz - dz, c.stair.y0, 0.5, 0.5); link(cx + dx, cz + dz, c.stair.y0 + H, 0.5, 0.5);
         return [fi, out.slice()];
       }
-      if (c.ladder) { const o = c.ladder.y0 === f ? c.ladder.y1 : c.ladder.y1 === f ? c.ladder.y0 : null; if (o !== null) { const i = floors[ci].indexOf(o); if (i >= 0) out.push(nid(ci, i)); } }
+      if (c.ladder) { const o = Math.abs(c.ladder.y0 - f) < 0.05 ? c.ladder.y1 : Math.abs(c.ladder.y1 - f) < 0.05 ? c.ladder.y0 : null; if (o !== null) { const i = floors[ci].findIndex((g) => Math.abs(g - o) < 0.05); if (i >= 0) out.push(nid(ci, i)); } }
       D4.forEach(([dx, dz], d) => { if (railBlocks(c.rails[d], f)) return; link(cx + dx, cz + dz, f, 1.35, 3.0, (d + 2) % 4); });
       // diagonals only across open, level corners
       for (const [dx, dz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {

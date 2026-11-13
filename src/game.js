@@ -443,6 +443,7 @@ for (const t of [1, 2]) scene.add(baseMark[t]);
 function loadMap(id) {
   const def = mapById(id); if (M && M.id === def.id) return;
   M = compile(def); applyTheme(M.theme); buildWorld();
+  const ext = Math.max(M.MW, M.MH) * M.CS / 2 + 6; Object.assign(sun.shadow.camera, { left: -ext, right: ext, top: ext, bottom: -ext }); sun.shadow.camera.updateProjectionMatrix();
   for (const t of [1, 2]) baseMark[t].position.set(M.BASE[t].x, 0, M.BASE[t].z);
 }
 function flagMesh() {
