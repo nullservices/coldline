@@ -79,13 +79,13 @@ const toHost = (m) => { if (Net.isHost) Host.onMsg(1, m); else if (Net.hostConn 
    HOST — authoritative match state, objectives, bots
    ===================================================================== */
 const Host = {
-  on: false, players: new Map(), mode: 'dm', map: 'campus', nades: [], scores: [0, 0, 0], time: 0, phase: 'live', phaseT: 0, flags: [], seq: 0, snapAcc: 0, last: 0,
+  on: false, players: new Map(), mode: 'dm', map: 'campus', nades: [], glassBroken: new Set(), scores: [0, 0, 0], time: 0, phase: 'live', phaseT: 0, flags: [], seq: 0, snapAcc: 0, last: 0,
   nextId: 2, nextBot: 100, clock: 0, roundAge: 0,
   send(id, m) { if (id === 1) Client.onMsg(m); else { const c = Net.conns.get(id); if (c && c.open) c.send(m); } },
   all(m) { for (const c of Net.conns.values()) if (c.open) c.send(m); Client.onMsg(m); },
   say(text, team = 0) { this.all({ t: 'msg', text, team }); },
   start(mode, bots, name, map) {
-    this.map = mapById(map).id; loadMap(this.map);
+    this.map = mapById(map).id; loadMap(this.map); this.glassBroken = new Set();
     this.on = true; this.mode = mode; this.players.clear();
     this.addPlayer(1, name, false);
     for (let i = 0; i < bots; i++) this.addPlayer(this.nextBot++, BOT_NAMES[i % BOT_NAMES.length], true);
@@ -164,6 +164,7 @@ const Host = {
     if (m.t === 'in') { if (p.alive) { p.x = +m.x || 0; p.y = +m.y || 0; p.z = +m.z || 0; p.yaw = +m.yaw || 0; p.pitch = +m.pitch || 0; p.cr = !!m.cr; p.w = m.w | 0; } }
     else if (m.t === 'fire') { if (p.alive) { const msg = { t: 'fire', id, w: m.w | 0, es: m.es }; for (const [cid, c] of Net.conns) if (cid !== id && c.open) c.send(msg); if (id !== 1) Client.onMsg(msg); } }
     else if (m.t === 'hit') { if (p.alive && this.canHit(p, this.players.get(m.id), m.o)) { const w = WPN[m.w | 0] || WPN[0]; this.damage(m.id, id, w.dmg * clamp(m.n | 0, 1, w.pellets || 1) * (m.hs ? 2 : 1), m.hs, m.w | 0); } }
+    else if (m.t === 'glass') { const id = m.id | 0; if (M.glassPanes.has(id) && !this.glassBroken.has(id)) { this.glassBroken.add(id); this.all({ t: 'glass', id }); } }
     else if (m.t === 'nade') { if (p.alive && Array.isArray(m.o) && Array.isArray(m.v) && Math.hypot(m.o[0] - p.x, m.o[2] - p.z) < 2.5) this.throwNade(p, m.o.map(Number), m.v.map(Number)); }
     else if (m.t === 'team') { if (this.mode !== 'dm') { if (p.alive) this.kill(p, null, 0, 0); p.team = 3 - p.team; this.roster(); this.say(p.name + ' switched to ' + TEAM_NAME[p.team]); } }
   },
@@ -252,7 +253,7 @@ const Host = {
         const d = Math.hypot(e.x - b.x, e.z - b.z); if (d >= bd) continue;
         let da = Math.atan2(-(e.x - b.x), -(e.z - b.z)) - b.yaw; da = Math.atan2(Math.sin(da), Math.cos(da));
         if (d > 8 && Math.abs(da) > 1.3) continue;
-        if (M.los(b.x, b.y + 1.5, b.z, e.x, e.y + (e.cr ? 0.8 : 1.2), e.z)) { best = e; bd = d; }
+        if (M.los(b.x, b.y + 1.5, b.z, e.x, e.y + (e.cr ? 0.8 : 1.2), e.z, true)) { best = e; bd = d; }
       }
       if (best !== ai.target) { ai.target = best; ai.react = 0.3 + Math.random() * 0.35; ai.burst = 0; }
       ai.goalT -= 0.25;
@@ -284,7 +285,13 @@ const Host = {
         this.throwNade(b, [r2(b.x + dx * 0.5), r2(b.y + 1.4), r2(b.z + dz * 0.5)], [r2(dx * sp), r2(5 + Math.max(0, tgt.y - b.y) * 0.8), r2(dz * sp)]);
       }
       ai.react -= dt;
-      if (ai.react <= 0 && this.clock >= ai.next && !M.los(b.x, b.y + 1.5, b.z, tgt.x, ty, tgt.z)) { ai.target = null; ai.next = this.clock + 0.2; }
+      if (ai.react <= 0 && this.clock >= ai.next && !M.los(b.x, b.y + 1.5, b.z, tgt.x, ty, tgt.z, true)) { ai.target = null; ai.next = this.clock + 0.2; }
+      else if (ai.react <= 0 && this.clock >= ai.next && !M.los(b.x, b.y + 1.5, b.z, tgt.x, ty, tgt.z)) { // a window is in the way: shoot it out
+        const dx = tgt.x - b.x, dy = ty - (b.y + 1.5), dz = tgt.z - b.z, L = Math.hypot(dx, dy, dz), t = M.rayMap(b.x, b.y + 1.5, b.z, dx / L, dy / L, dz / L, L);
+        const gid = M.hitInfo().kind === 'glass' ? M.glassAt(b.x + dx / L * (t + 0.03), b.y + 1.5 + dy / L * (t + 0.03), b.z + dz / L * (t + 0.03)) : -1;
+        ai.next = this.clock + 0.15; this.all({ t: 'fire', id: b.id, w: 0, es: [[r2(b.x + dx / L * t), r2(b.y + 1.5 + dy / L * t), r2(b.z + dz / L * t)]] });
+        if (gid >= 0 && !this.glassBroken.has(gid)) { this.glassBroken.add(gid); this.all({ t: 'glass', id: gid }); } else ai.target = null;
+      }
       else if (ai.react <= 0 && this.clock >= ai.next) {
         ai.next = this.clock + 0.12; if (++ai.burst >= 4 + ((Math.random() * 3) | 0)) { ai.burst = 0; ai.next = this.clock + 0.45 + Math.random() * 0.6; }
         const hitP = clamp(0.5 - d * 0.006, 0.1, 0.5), hit = Math.random() < hitP;
@@ -417,8 +424,9 @@ function boxGeo(sx, sy, sz, ts) {
   for (let f = 0; f < 6; f++) for (let i = 0; i < 4; i++) { const j = f * 4 + i; uv.setXY(j, uv.getX(j) * dims[f][0] / ts, uv.getY(j) * dims[f][1] / ts); }
   return g;
 }
-let world = null;
+let world = null; const glassInst = new Map(); // pane id -> [InstancedMesh, index]
 function buildWorld() {
+  glassInst.clear();
   if (world) { scene.remove(world); world.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); }
   world = new THREE.Group(); scene.add(world);
   const T = M.theme, { MW, MH, CS } = M, d = new THREE.Object3D(), col = new THREE.Color();
@@ -438,6 +446,7 @@ function buildWorld() {
     im.castShadow = im.receiveShadow = b0.kind !== 'glass';
     list.forEach((b, i) => {
       d.position.set(b.x, b.y, b.z); d.updateMatrix(); im.setMatrixAt(i, d.matrix);
+      if (b.glass !== undefined) glassInst.set(b.glass, [im, i]);
       if (k.tint) im.setColorAt(i, col.set(k.tint[(hash2(Math.round(b.x * 7), Math.round(b.z * 7)) * k.tint.length) | 0]));
     });
     world.add(im);
@@ -596,7 +605,7 @@ const SURF = { carpet: 'carpet', floor: 'carpet', wood: 'wood', planks: 'wood', 
 const surf = (kind) => kind === 'ground' ? (SURF[M.theme.ground] || 'concrete') : (SURF[kind] || 'concrete');
 const IMPACT_COL = { concrete: '#d9d2c4', wood: '#9c7a4e', metal: '#ffd27a', carpet: '#b8a890', grass: '#8a7a4a', snow: '#ffffff', glass: '#cfe8ff' };
 function impact(x, y, z, hi, vol = 0.5) {
-  if (!hi || hi.kind === 'none') return;
+  if (!hi || hi.kind === 'none' || hi.kind === 'glass') return;
   const s = surf(hi.kind), pos = [x, y, z];
   if (s !== 'glass') { const h = holes[holeI++ % holes.length]; h.position.set(x + hi.nx * 0.006, y + hi.ny * 0.006, z + hi.nz * 0.006); _n.set(x + hi.nx, y + hi.ny, z + hi.nz); h.lookAt(_n); h.rotation.z = Math.random() * 6.28; h.visible = true; }
   const pf = puffs[pfI++ % puffs.length]; pf.m.position.set(x + hi.nx * 0.05, y + hi.ny * 0.05, z + hi.nz * 0.05); pf.m.material.color.set(IMPACT_COL[s]); pf.m.visible = true; pf.t = s === 'metal' ? 0.5 : 0;
@@ -617,6 +626,24 @@ function ejectCasing(x, y, z, rx, rz, shotgun) {
   const c = casings[caI++ % casings.length]; c.m.material = shotgun ? shellMat : brassMat; c.m.scale.setScalar(shotgun ? 1.8 : 1);
   c.m.position.set(x, y, z); c.m.rotation.set(Math.random() * 3, Math.random() * 3, 0); c.m.visible = true; c.t = 1.4; c.g = Math.max(0, M.groundAt(x, z, y, 0.05) );
   c.v.set(rx * 2.2 + (Math.random() - 0.5), 1.6 + Math.random() * 0.8, rz * 2.2 + (Math.random() - 0.5));
+}
+// shattering glass: hide the pane's instance, throw shards, and open the cell for movement, sight and shots
+const shardMat = new THREE.MeshStandardMaterial({ color: '#cfe6ff', transparent: true, opacity: 0.75, roughness: 0.1, metalness: 0.2, side: THREE.DoubleSide });
+const shards = Array.from({ length: 60 }, () => { const m = new THREE.Mesh(new THREE.PlaneGeometry(0.09, 0.14), shardMat); m.visible = false; scene.add(m); return { m, v: new THREE.Vector3(), w: new THREE.Vector3(), t: 0, g: 0 }; });
+let shI = 0; const _zero = new THREE.Matrix4().makeScale(0, 0, 0);
+function breakPane(id, fromX, fromZ) {
+  const p = M.breakGlass(id); if (!p) return false;
+  const r = glassInst.get(id); if (r) { r[0].setMatrixAt(r[1], _zero); r[0].instanceMatrix.needsUpdate = true; }
+  const cx = p.cx, cz = p.cz, y0 = p.y0 + 0.1, y1 = p.y1 - 0.35;
+  const dirx = fromX === undefined ? 0 : Math.sign(cx - fromX), dirz = fromZ === undefined ? 0 : Math.sign(cz - fromZ);
+  for (let k = 0; k < 16; k++) {
+    const s = shards[shI++ % shards.length], u = Math.random() * 2.3 - 1.15;
+    s.m.position.set(p.alongX ? cx + u : cx, y0 + Math.random() * (y1 - y0), p.alongX ? cz : cz + u); s.m.rotation.set(p.alongX ? 0 : 0, p.alongX ? 0 : Math.PI / 2, Math.random() * 3);
+    s.v.set((Math.random() - 0.5) * 1.5 + dirx * 1.5, Math.random() * 1.2 - 0.3, (Math.random() - 0.5) * 1.5 + dirz * 1.5); s.w.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+    s.t = 1.6 + Math.random(); s.g = M.groundAt(s.m.position.x, s.m.position.z, s.m.position.y, 0.02); s.m.visible = true;
+  }
+  play('hit_glass', { pos: [cx, (y0 + y1) / 2, cz], vol: 1.2, rate: 0.85, ref: 8, max: 120 }); play('hit_glass', { pos: [cx, (y0 + y1) / 2, cz], vol: 0.8, rate: 1.2, ref: 8, max: 120, delay: 0.08 });
+  return true;
 }
 // grenades: every peer simulates the same fixed-step physics from the same throw, so explosions agree without network updates
 const NADE = { fuse: 3.2, radius: 7.5, dmg: 115, speed: 15 };
@@ -659,6 +686,7 @@ function explode(x, y, z) {
   for (let k = 0; k < 10; k++) spark(x, y + 0.2, z, { nx: (Math.random() - 0.5), ny: 1, nz: (Math.random() - 0.5) });
   for (let k = 0; k < 4; k++) { const h = holes[holeI++ % holes.length]; h.position.set(x + (Math.random() - 0.5) * 1.2, M.groundAt(x, z, y + 0.3, 0.1) + 0.01, z + (Math.random() - 0.5) * 1.2); h.rotation.set(-Math.PI / 2, 0, Math.random() * 6); h.scale.setScalar(4 + Math.random() * 3); h.visible = true; }
   boomLight.position.set(x, y + 0.6, z); boomLight.intensity = 90;
+  for (const [id, p] of M.glassPanes) if (!p.broken && Math.hypot(p.cx - x, (p.y0 + p.y1) / 2 - y, p.cz - z) < 5) breakPane(id, x, z);
   const d = Math.hypot(x - camera.position.x, y - camera.position.y, z - camera.position.z);
   shake = Math.max(shake, clamp(1 - d / 28, 0, 1) * 0.9);
   play('explode', { pos: [x, y, z], vol: 1.3, ref: 14, max: 260, rate: 0.9 });
@@ -750,6 +778,7 @@ const Client = {
       case 'spawn': if (m.id === this.id) localSpawn(m); else { const e = this.ents.get(m.id); if (e) { e.x = e.tx = m.x; e.z = e.tz = m.z; e.y = e.ty = m.y || 0; } } break;
       case 'fire': this.remoteFire(m); break;
       case 'nade': spawnNade(m.id, m.o, m.v); break;
+      case 'glass': { const e = this.ents.get(m.id); breakPane(m.id, e ? e.x : undefined, e ? e.z : undefined); break; }
       case 'hurt': $('#dmg').style.opacity = 1; setTimeout(() => { $('#dmg').style.opacity = 0; }, 90); sndBeep(90, 0.12, 0.2, 'sawtooth'); break;
       case 'kill': this.onKill(m); break;
       case 'msg': announce(m.text, m.team); break;
@@ -907,6 +936,7 @@ function fire(w) {
     const a = Math.random() * Math.PI * 2, rr = Math.sqrt(Math.random()) * spread;
     const d = _b.copy(_f).addScaledVector(_r, Math.cos(a) * rr).addScaledVector(_u, Math.sin(a) * rr).normalize(), dv = [d.x, d.y, d.z];
     let best = M.rayMap(o[0], o[1], o[2], d.x, d.y, d.z, 140), hitE = null, hs = false; const hi = { ...M.hitInfo() };
+    if (hi.kind === 'glass') { const gid = M.glassAt(o[0] + d.x * (best + 0.03), o[1] + d.y * (best + 0.03), o[2] + d.z * (best + 0.03)); if (gid >= 0 && breakPane(gid, me.x, me.z)) toHost({ t: 'glass', id: gid }); }
     for (const e of Client.ents.values()) {
       if (!e.alive || !Client.hostile(e.id)) continue;
       const h = e.cr ? 1.25 : 1.8;

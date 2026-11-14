@@ -25,8 +25,8 @@ local HTTP server works without it.
 All maps are symmetric (the second half is the first rotated 180°), so both teams get the same
 base. Every one has several height levels: step height 0.4 m, jump reaches 1.45 m (desks,
 planters, low walls), **crouch-jump fits through windows** (standing does not), ladders: face
-the rungs and hold W. Glass walls can be seen and shot through but not walked through; railings
-never stop bullets.
+the rungs and hold W. Glass walls block movement, sight and bullets until a shot or a blast shatters them (synced for
+everyone, and bots shoot windows out); railings never stop bullets.
 
 | map | setting | what makes it play |
 |---|---|---|

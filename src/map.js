@@ -12,7 +12,7 @@
    Cell characters (any layer):
      .  empty                      #  wall block, full layer height (kind: def.kinds['#'], default concrete)
      B  second wall kind (brick)   p  third wall kind (plaster)   W  wood block
-     g  glass curtain wall, full layer (see and shoot through, blocks movement)
+     g  glass curtain wall, full layer: blocks movement, sight and shots until a bullet or blast shatters it
      C  shipping container (2.4)   c  crate (1.2)     h  wall 1.4 (vault over)
      l  low barrier / parapet (1.0) P  planter (0.9)    d  desk (0.75)
      k  market stall: counter (1.0) under a canopy        o  square pillar
@@ -67,7 +67,8 @@ export function compile(def) {
     at(cx, cz).s.push({ x0: X + x0, x1: X + x1, z0: Z + z0, z1: Z + z1, y0, y1, kind, ...extra });
     if (render) boxes.push({ x: X + (x0 + x1) / 2, y: (y0 + y1) / 2, z: Z + (z0 + z1) / 2, sx: x1 - x0, sy: y1 - y0, sz: z1 - z0, kind });
   }
-  const deco = (cx, cz, x0, x1, z0, z1, y0, y1, kind) => { const X = cellX(cx) - CS / 2, Z = cellZ(cz) - CS / 2; boxes.push({ x: X + (x0 + x1) / 2, y: (y0 + y1) / 2, z: Z + (z0 + z1) / 2, sx: x1 - x0, sy: y1 - y0, sz: z1 - z0, kind }); };
+  const deco = (cx, cz, x0, x1, z0, z1, y0, y1, kind, extra) => { const X = cellX(cx) - CS / 2, Z = cellZ(cz) - CS / 2; boxes.push({ x: X + (x0 + x1) / 2, y: (y0 + y1) / 2, z: Z + (z0 + z1) / 2, sx: x1 - x0, sy: y1 - y0, sz: z1 - z0, kind, ...extra }); };
+  const glassPanes = new Map(); // id -> ghost solid of a glass pane (broken: true once shattered)
 
   // pass 1: solids
   LAYERS.forEach((L, k) => {
@@ -78,11 +79,12 @@ export function compile(def) {
       if (FULL[ch]) { solid(cx, cz, 0, CS, 0, CS, y0, y0 + H, KIND[ch]); continue; }
       if (k > 0 && (ch !== 'L' || chr(k - 1, cx, cz) !== 'L') && !FULL[chr(k - 1, cx, cz)]) solid(cx, cz, 0, CS, 0, CS, y0 - SLAB, y0, ch === 'r' ? KIND.r : ch === 'R' || ch === 'l' ? KIND.R : KIND['=']);
       const m = CS * 0.5;
-      if (ch === 'g') { // curtain wall: a thin pane with a spandrel band above and a sill below; blocks movement but not sight or shots
-        c.s.push({ x0: cellX(cx) - CS / 2, x1: cellX(cx) + CS / 2, z0: cellZ(cz) - CS / 2, z1: cellZ(cz) + CS / 2, y0, y1: y0 + H, ghost: true, kind: 'glass' });
-        const alongX = WALLISH(chr(k, cx - 1, cz)) || WALLISH(chr(k, cx + 1, cz)), t = 0.06;
-        const pane = (a, b, y1, y2, kind) => alongX ? deco(cx, cz, 0, CS, m - a, m + b, y1, y2, kind) : deco(cx, cz, m - a, m + b, 0, CS, y1, y2, kind);
-        pane(t, t, y0 + 0.1, y0 + H - 0.35, 'glass'); pane(0.2, 0.2, y0 + H - 0.35, y0 + H, KIND['#']); pane(0.15, 0.15, y0, y0 + 0.1, 'metal');
+      if (ch === 'g') { // curtain wall: a thin pane with a spandrel band above and a sill below; solid until shattered by a bullet or a blast
+        const alongX = WALLISH(chr(k, cx - 1, cz)) || WALLISH(chr(k, cx + 1, cz)), t = 0.06, gid = (cz * MW + cx) * 8 + k;
+        const gs = { x0: cellX(cx) - CS / 2, x1: cellX(cx) + CS / 2, z0: cellZ(cz) - CS / 2, z1: cellZ(cz) + CS / 2, y0, y1: y0 + H, ghost: true, kind: 'glass', broken: false, id: gid, alongX, cx: cellX(cx), cz: cellZ(cz) };
+        c.s.push(gs); glassPanes.set(gid, gs);
+        const pane = (a, b, y1, y2, kind, extra) => alongX ? deco(cx, cz, 0, CS, m - a, m + b, y1, y2, kind, extra) : deco(cx, cz, m - a, m + b, 0, CS, y1, y2, kind, extra);
+        pane(t, t, y0 + 0.1, y0 + H - 0.35, 'glass', { glass: gid }); pane(0.2, 0.2, y0 + H - 0.35, y0 + H, KIND['#']); pane(0.15, 0.15, y0, y0 + 0.1, 'metal');
         for (const q of [0.02, CS / 2 - 0.03, CS - 0.08]) alongX ? deco(cx, cz, q, q + 0.06, m - 0.08, m + 0.08, y0 + 0.1, y0 + H - 0.35, 'metal') : deco(cx, cz, m - 0.08, m + 0.08, q, q + 0.06, y0 + 0.1, y0 + H - 0.35, 'metal');
         continue;
       }
@@ -144,7 +146,7 @@ export function compile(def) {
   function topAt(x, z, feet, step = STEP) {
     const c = cellAt(x, z); if (!c) return 0;
     let g = 0; const lim = feet + step;
-    for (const s of c.s) if (s.y1 <= lim && s.y1 > g && x >= s.x0 && x < s.x1 && z >= s.z0 && z < s.z1) g = s.y1;
+    for (const s of c.s) if (!s.broken && s.y1 <= lim && s.y1 > g && x >= s.x0 && x < s.x1 && z >= s.z0 && z < s.z1) g = s.y1;
     if (c.stair) { const h = stairH(c, x, z); if (h <= lim && h > g) g = h; }
     return g;
   }
@@ -152,7 +154,7 @@ export function compile(def) {
   function ceilAt(x, z, feet, step = STEP) {
     const c = cellAt(x, z); if (!c) return MAXY;
     let m = 1e9; const lim = feet + step;
-    for (const s of c.s) if (s.y0 > lim && s.y0 < m && x >= s.x0 && x < s.x1 && z >= s.z0 && z < s.z1) m = s.y0;
+    for (const s of c.s) if (!s.broken && s.y0 > lim && s.y0 < m && x >= s.x0 && x < s.x1 && z >= s.z0 && z < s.z1) m = s.y0;
     return m;
   }
   // would a body of radius r, standing at feet with height h, intersect anything?
@@ -160,7 +162,7 @@ export function compile(def) {
     const lim = feet + step + 0.01, top = feet + h;
     for (const [dx, dz] of [[-r, -r], [r, -r], [-r, r], [r, r]]) {
       const px = x + dx, pz = z + dz, c = cellAt(px, pz); if (!c) return true;
-      for (const s of c.s) if (s.y1 > lim && s.y0 < top && px >= s.x0 && px < s.x1 && pz >= s.z0 && pz < s.z1) return true;
+      for (const s of c.s) if (!s.broken && s.y1 > lim && s.y0 < top && px >= s.x0 && px < s.x1 && pz >= s.z0 && pz < s.z1) return true;
       if (c.stair && stairH(c, px, pz) > lim) return true;
     }
     return false;
@@ -219,7 +221,7 @@ export function compile(def) {
     if (fb < 0) return ta + (tb - ta) * (fa / (fa - fb));
     return Infinity;
   }
-  function rayMap(ox, oy, oz, dx, dy, dz, max) {
+  function rayMap(ox, oy, oz, dx, dy, dz, max, ignoreGlass = false) {
     let best = max;
     hit.kind = 'none'; hit.nx = 0; hit.ny = 1; hit.nz = 0;
     if (dy < 0) { const t = -oy / dy; if (t < best) { best = t; hit.kind = 'ground'; } } // ground plane
@@ -237,7 +239,7 @@ export function compile(def) {
       } else {
         const c = cells[cz * MW + cx];
         for (const s of c.s) {
-          if (s.ghost || s.rail) continue; const t = rayBox(s, ox, oy, oz, dx, dy, dz);
+          if ((s.ghost && (s.broken || ignoreGlass)) || s.rail) continue; const t = rayBox(s, ox, oy, oz, dx, dy, dz);
           if (t < best && t <= t1 + 1e-6) { best = t; hit.kind = s.kind || 'concrete'; hit.nx = _axis === 0 ? -Math.sign(dx) : 0; hit.ny = _axis === 1 ? -Math.sign(dy) : 0; hit.nz = _axis === 2 ? -Math.sign(dz) : 0; }
         }
         if (c.stair) { const t = rayStair(c, cx, cz, ox, oy, oz, dx, dy, dz, t0, t1); if (t < best) { best = t; hit.kind = KIND.step; hit.nx = 0; hit.ny = 1; hit.nz = 0; } }
@@ -248,10 +250,13 @@ export function compile(def) {
     }
     return best;
   }
-  function los(ax, ay, az, bx, by, bz) {
+  function los(ax, ay, az, bx, by, bz, ignoreGlass = false) {
     const dx = bx - ax, dy = by - ay, dz = bz - az, d = Math.hypot(dx, dy, dz);
-    return d < 0.5 || rayMap(ax, ay, az, dx / d, dy / d, dz / d, d) >= d - 0.01;
+    return d < 0.5 || rayMap(ax, ay, az, dx / d, dy / d, dz / d, d, ignoreGlass) >= d - 0.01;
   }
+  // glass: id of the intact pane containing a point (or -1); breakGlass marks a pane shattered and returns it (null if already broken)
+  function glassAt(x, y, z) { const c = cellAt(x, z); if (!c) return -1; for (const s of c.s) if (s.ghost && !s.broken && y >= s.y0 && y < s.y1) return s.id; return -1; }
+  function breakGlass(id) { const p = glassPanes.get(id); if (!p || p.broken) return null; p.broken = true; return p; }
 
   /* ---------- walkable surfaces (floors) per cell ---------- */
   const covers = (s, cx, cz) => { const x = cellX(cx), z = cellZ(cz); return x >= s.x0 && x < s.x1 && z >= s.z0 && z < s.z1; };
@@ -378,6 +383,6 @@ export function compile(def) {
   return {
     id: def.id, name: def.name, desc: def.desc, theme: def.theme || {}, LAYERS, MW, MH, MAXY, CS, H, SLAB, STEP, RAIL_H, NODE,
     cellX, cellZ, toCx, toCz, SPAWNS, BASE, boxes, ladders, lamps, stairH, solidAt, topAt, ceilAt, blockedAt, groundAt, ceilingAt, ladderAt,
-    rayMap, los, hitInfo, groundKindAt, floors, stairIdx, nodeCount, nodeAt, findPath, reachable, cellsRO: cells,
+    rayMap, los, hitInfo, groundKindAt, glassAt, breakGlass, glassPanes, floors, stairIdx, nodeCount, nodeAt, findPath, reachable, cellsRO: cells,
   };
 }
