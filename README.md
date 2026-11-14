@@ -77,7 +77,9 @@ exposure and skyline (`city` / `hills`). Register it in `src/maps/index.js` and 
   (flag taken / dropped / returned / captured, case picked up, round won or lost) have alert
   stingers that rise for your team and fall for the enemy's.
 - In Infiltration, dead players spectate the living (teammates first) from behind the shoulder
-  until the next round; click to switch players.
+  until the next round; click to switch players. Someone who joins more than 15 s into a round waits
+  for the next one, so the host has **Restart round** (scores kept) and **Restart match** (scores
+  reset) in the Esc menu to redeploy everyone at once.
 
 ## Hit detection
 

@@ -105,9 +105,10 @@ const Host = {
     if (!bot) this.send(id, { t: 'welcome', id, mode: this.mode, map: this.map, code: Net.code });
     this.roster();
     if (this.on) {
-      if (this.mode === 'inf' && this.phase === 'live' && this.roundAge > 15) { p.respawnAt = Infinity; this.send(id, { t: 'msg', text: 'You will deploy next round' }); }
-      else this.spawn(p);
-      this.say(p.name + ' joined');
+      const waits = this.mode === 'inf' && this.phase === 'live' && this.roundAge > 15;
+      if (waits) { p.respawnAt = Infinity; this.send(id, { t: 'msg', text: 'You will deploy next round' }); } else this.spawn(p);
+      this.say(p.name + ' joined' + (waits ? ' — deploys next round' : ''));
+      if (waits) this.send(1, { t: 'msg', text: p.name + ' joined — Esc → Restart round to bring them in' });
     }
     return p;
   },
@@ -127,7 +128,11 @@ const Host = {
     this.flags = this.mode === 'ctf' ? [mk(1), mk(2)] : this.mode === 'inf' ? [mk(1, true)] : [];
   },
   resetMatch() { this.scores = [0, 0, 0]; for (const p of this.players.values()) { p.k = 0; p.d = 0; } this.newRound(); this.say(MODE_NAME[this.mode] + ' — go', 0, 'go'); },
-  newRound() { this.phase = 'live'; this.time = CFG[this.mode].time; this.roundAge = 0; this.setupFlags(); for (const p of this.players.values()) this.spawn(p); },
+  newRound() { this.phase = 'live'; this.time = CFG[this.mode].time; this.roundAge = 0; this.nades = []; this.setupFlags(); for (const p of this.players.values()) { p.respawnAt = 0; this.spawn(p); } },
+  restart(roundOnly) { // host control from the pause menu: everyone redeploys at once
+    if (roundOnly && this.mode === 'inf') { this.newRound(); this.say('Host restarted the round', 0, 'go'); }
+    else { this.resetMatch(); this.say('Host restarted the match', 0, 'go'); }
+  },
   endMatch(text, team = 0) { this.phase = 'over'; this.phaseT = 10; this.say(text, team, 'over'); },
   roundWin(team, why) {
     this.scores[team]++;
@@ -167,6 +172,7 @@ const Host = {
     else if (m.t === 'hit') { if (p.alive && this.canHit(p, this.players.get(m.id), m.o)) { const w = WPN[m.w | 0] || WPN[0]; this.damage(m.id, id, w.dmg * clamp(m.n | 0, 1, w.pellets || 1) * (m.hs ? 2 : 1), m.hs, m.w | 0); } }
     else if (m.t === 'glass') { const id = m.id | 0; if (M.glassPanes.has(id) && !this.glassBroken.has(id)) { this.glassBroken.add(id); this.all({ t: 'glass', id }); } }
     else if (m.t === 'nade') { if (p.alive && Array.isArray(m.o) && Array.isArray(m.v) && Math.hypot(m.o[0] - p.x, m.o[2] - p.z) < 2.5) this.throwNade(p, m.o.map(Number), m.v.map(Number)); }
+    else if (m.t === 'restart') { if (id === 1) this.restart(!!m.round); }
     else if (m.t === 'team') { if (this.mode !== 'dm') { if (p.alive) this.kill(p, null, 0, 0); p.team = 3 - p.team; this.roster(); this.say(p.name + ' switched to ' + TEAM_NAME[p.team]); } }
   },
   throwNade(p, o, v) {
@@ -1156,6 +1162,7 @@ $('#code').addEventListener('keydown', (e) => { if (e.key === 'Enter') doJoin();
 function enterGame(code) {
   inGame = true; $('#menu').style.display = 'none'; $('#hud').style.display = 'block'; $('#pause').style.display = TEST ? 'none' : 'grid';
   $('#codeTxt').textContent = code; $('#codeBig').textContent = code; $('#teamBtn').style.display = Client.mode === 'dm' ? 'none' : '';
+  $('#hostRow').style.display = Net.isHost ? '' : 'none'; $('#roundBtn').style.display = Client.mode === 'inf' ? '' : 'none';
   try { history.replaceState(null, '', '#' + code); } catch (e) {}
 }
 function leave(reason) {
@@ -1169,6 +1176,8 @@ try { const n = sessionStorage.getItem('coldline-note'); if (n) { status(n); ses
 $('#resumeBtn').addEventListener('click', () => { audioInit(); const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); });
 $('#leaveBtn').addEventListener('click', () => leave(''));
 $('#teamBtn').addEventListener('click', () => toHost({ t: 'team' }));
+$('#restartBtn').addEventListener('click', () => { toHost({ t: 'restart' }); $('#resumeBtn').click(); });
+$('#roundBtn').addEventListener('click', () => { toHost({ t: 'restart', round: 1 }); $('#resumeBtn').click(); });
 $('#sens').addEventListener('input', (e) => { sens = +e.target.value; });
 $('#gfx').addEventListener('change', (e) => { gfxHigh = e.target.value === 'high'; renderer.shadowMap.enabled = gfxHigh; sun.castShadow = gfxHigh; renderer.setPixelRatio(gfxHigh ? Math.min(window.devicePixelRatio || 1, 1.75) : 1); resize(); scene.traverse((o) => { if (o.material) o.material.needsUpdate = true; }); });
 $('#copyBtn').addEventListener('click', () => {
