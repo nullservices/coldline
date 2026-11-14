@@ -19,6 +19,7 @@ import { MAPS, mapById } from './maps/index.js';
 const $ = (s) => document.querySelector(s);
 const Q = new URLSearchParams(location.search);
 const TEST = Q.has('test');
+const BUILD = '__BUILD__'; // replaced by build.js; versions asset URLs so browsers never keep stale files
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const r2 = (v) => Math.round(v * 100) / 100;
 
@@ -83,7 +84,7 @@ const Host = {
   nextId: 2, nextBot: 100, clock: 0, roundAge: 0,
   send(id, m) { if (id === 1) Client.onMsg(m); else { const c = Net.conns.get(id); if (c && c.open) c.send(m); } },
   all(m) { for (const c of Net.conns.values()) if (c.open) c.send(m); Client.onMsg(m); },
-  say(text, team = 0) { this.all({ t: 'msg', text, team }); },
+  say(text, team = 0, ev = '') { this.all({ t: 'msg', text, team, ev }); },
   start(mode, bots, name, map) {
     this.map = mapById(map).id; loadMap(this.map); this.glassBroken = new Set();
     this.on = true; this.mode = mode; this.players.clear();
@@ -125,15 +126,15 @@ const Host = {
     const mk = (team, isCase) => ({ team, s: 0, x: M.BASE[team].x, y: 0, z: M.BASE[team].z, c: 0, dt: 0, isCase });
     this.flags = this.mode === 'ctf' ? [mk(1), mk(2)] : this.mode === 'inf' ? [mk(1, true)] : [];
   },
-  resetMatch() { this.scores = [0, 0, 0]; for (const p of this.players.values()) { p.k = 0; p.d = 0; } this.newRound(); this.say(MODE_NAME[this.mode] + ' — go'); },
+  resetMatch() { this.scores = [0, 0, 0]; for (const p of this.players.values()) { p.k = 0; p.d = 0; } this.newRound(); this.say(MODE_NAME[this.mode] + ' — go', 0, 'go'); },
   newRound() { this.phase = 'live'; this.time = CFG[this.mode].time; this.roundAge = 0; this.setupFlags(); for (const p of this.players.values()) this.spawn(p); },
-  endMatch(text) { this.phase = 'over'; this.phaseT = 10; this.say(text); },
+  endMatch(text, team = 0) { this.phase = 'over'; this.phaseT = 10; this.say(text, team, 'over'); },
   roundWin(team, why) {
     this.scores[team]++;
-    if (this.scores[team] >= CFG.inf.limit) this.endMatch(TEAM_NAME[team] + ' team wins the match');
-    else { this.phase = 'roundend'; this.phaseT = 5; this.say(TEAM_NAME[team] + ' wins the round — ' + why, team); }
+    if (this.scores[team] >= CFG.inf.limit) this.endMatch(TEAM_NAME[team] + ' team wins the match', team);
+    else { this.phase = 'roundend'; this.phaseT = 5; this.say(TEAM_NAME[team] + ' wins the round — ' + why, team, 'round'); }
   },
-  dropFlags(p) { for (const f of this.flags) if (f.s === 1 && f.c === p.id) { f.s = 2; f.c = 0; f.x = p.x; f.y = M.groundAt(p.x, p.z, p.y, 0.3); f.z = p.z; f.dt = 25; this.say((f.isCase ? 'The case' : TEAM_NAME[f.team] + ' flag') + ' was dropped'); } },
+  dropFlags(p) { for (const f of this.flags) if (f.s === 1 && f.c === p.id) { f.s = 2; f.c = 0; f.x = p.x; f.y = M.groundAt(p.x, p.z, p.y, 0.3); f.z = p.z; f.dt = 25; this.say((f.isCase ? 'The case' : TEAM_NAME[f.team] + ' flag') + ' was dropped', 0, 'dropped'); } },
   damage(tid, aid, dmg, hs, w) {
     const v = this.players.get(tid), a = this.players.get(aid);
     if (!v || !v.alive || this.phase !== 'live') return;
@@ -211,17 +212,17 @@ const Host = {
           const own = this.flags.find((o) => o.team === c.team);
           if (own.s === 0 && Math.hypot(c.x - M.BASE[c.team].x, c.z - M.BASE[c.team].z) < 2) {
             this.scores[c.team]++; f.s = 0; f.c = 0; f.x = M.BASE[f.team].x; f.y = 0; f.z = M.BASE[f.team].z;
-            this.say(c.name + ' captured the ' + TEAM_NAME[f.team] + ' flag', c.team);
+            this.say(c.name + ' captured the ' + TEAM_NAME[f.team] + ' flag', c.team, 'captured');
             if (this.scores[c.team] >= CFG.ctf.limit) { this.endMatch(TEAM_NAME[c.team] + ' team wins the match'); return; }
           }
         }
         continue;
       }
-      if (f.s === 2 && !f.isCase) { f.dt -= dt; if (f.dt <= 0) { f.s = 0; f.x = M.BASE[f.team].x; f.y = 0; f.z = M.BASE[f.team].z; this.say(TEAM_NAME[f.team] + ' flag returned'); continue; } }
+      if (f.s === 2 && !f.isCase) { f.dt -= dt; if (f.dt <= 0) { f.s = 0; f.x = M.BASE[f.team].x; f.y = 0; f.z = M.BASE[f.team].z; this.say(TEAM_NAME[f.team] + ' flag returned', f.team, 'returned'); continue; } }
       for (const p of this.players.values()) {
         if (!p.alive || Math.hypot(p.x - f.x, p.z - f.z) > 1.5 || Math.abs(p.y - f.y) > 2) continue;
-        if (p.team !== f.team) { f.s = 1; f.c = p.id; this.say(p.name + (f.isCase ? ' has the case' : ' took the ' + TEAM_NAME[f.team] + ' flag'), p.team); break; }
-        else if (f.s === 2 && !f.isCase) { f.s = 0; f.x = M.BASE[f.team].x; f.y = 0; f.z = M.BASE[f.team].z; this.say(p.name + ' returned the ' + TEAM_NAME[f.team] + ' flag', p.team); break; }
+        if (p.team !== f.team) { f.s = 1; f.c = p.id; this.say(p.name + (f.isCase ? ' has the case' : ' took the ' + TEAM_NAME[f.team] + ' flag'), p.team, 'taken'); break; }
+        else if (f.s === 2 && !f.isCase) { f.s = 0; f.x = M.BASE[f.team].x; f.y = 0; f.z = M.BASE[f.team].z; this.say(p.name + ' returned the ' + TEAM_NAME[f.team] + ' flag', p.team, 'returned'); break; }
       }
     }
   },
@@ -315,7 +316,7 @@ const Host = {
       this.tickFlags(dt); this.tickNades(dt);
       if (this.time <= 0 && this.phase === 'live') {
         if (this.mode === 'inf') this.roundWin(1, 'time ran out');
-        else if (this.mode === 'ctf') this.endMatch(this.scores[1] === this.scores[2] ? 'Draw' : TEAM_NAME[this.scores[1] > this.scores[2] ? 1 : 2] + ' team wins the match');
+        else if (this.mode === 'ctf') this.endMatch(this.scores[1] === this.scores[2] ? 'Draw' : TEAM_NAME[this.scores[1] > this.scores[2] ? 1 : 2] + ' team wins the match', this.scores[1] === this.scores[2] ? 0 : this.scores[1] > this.scores[2] ? 1 : 2);
         else { const top = [...this.players.values()].sort((a, b) => b.k - a.k)[0]; this.endMatch(top.name + ' wins the match'); }
       }
     }
@@ -386,7 +387,7 @@ function hash2(x, y) { let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263
 const TL = new THREE.TextureLoader();
 const NO_AO = new Set(['roof', 'plaster', 'asphalt', 'marble', 'steel', 'metal', 'rooftile', 'stucco', 'wood', 'rust', 'concrete3', 'facade', 'tiles']);
 function pbr(name, o = {}, repeat = 1) {
-  const load = (suf, srgb) => { const t = TL.load(`assets/tex/${name}_${suf}.jpg`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8; t.repeat.set(repeat, repeat); t.channel = 0; if (srgb) t.colorSpace = THREE.SRGBColorSpace; return t; };
+  const load = (suf, srgb) => { const t = TL.load(`assets/tex/${name}_${suf}.jpg?v=${BUILD}`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8; t.repeat.set(repeat, repeat); t.channel = 0; if (srgb) t.colorSpace = THREE.SRGBColorSpace; return t; };
   const m = new THREE.MeshStandardMaterial({ map: load('c', true), normalMap: load('n'), roughnessMap: load('r'), roughness: 1, metalness: 0, ...o });
   if (!NO_AO.has(name)) { m.aoMap = load('ao'); m.aoMapIntensity = 0.7; }
   return m;
@@ -482,6 +483,7 @@ function loadMap(id) {
   M = compile(def); applyTheme(M.theme); buildWorld();
   const ext = Math.max(M.MW, M.MH) * M.CS / 2 + 6; Object.assign(sun.shadow.camera, { left: -ext, right: ext, top: ext, bottom: -ext }); sun.shadow.camera.updateProjectionMatrix();
   for (const t of [1, 2]) baseMark[t].position.set(M.BASE[t].x, 0, M.BASE[t].z);
+  buildMiniBg();
 }
 function flagMesh() {
   const g = new THREE.Group();
@@ -550,7 +552,7 @@ function nadeMesh() {
   g.traverse((o) => { o.castShadow = true; }); return g;
 }
 let soldierAsset = null; const soldierQueue = [];
-new GLTFLoader().load('assets/models/soldier.glb', (g) => { soldierAsset = g; soldierQueue.splice(0).forEach(dressSoldier); }, undefined, (e) => console.warn('soldier model failed to load', e));
+new GLTFLoader().load(`assets/models/soldier.glb?v=${BUILD}`, (g) => { soldierAsset = g; soldierQueue.splice(0).forEach(dressSoldier); }, undefined, (e) => console.warn('soldier model failed to load', e));
 function soldier() { const g = new THREE.Group(); g.userData = { team: '#888', ready: false }; if (soldierAsset) dressSoldier(g); else soldierQueue.push(g); return g; }
 const GUN_POS = [8, 12, 4], GUN_ROT = [-1.4, 0.2, 1.5]; // in the hand bone's frame (centimetres)
 function holdGun(u, i) {
@@ -622,8 +624,8 @@ function spark(x, y, z, hi) {
 const brassMat = new THREE.MeshStandardMaterial({ color: '#c9a24a', roughness: 0.3, metalness: 0.9 }), shellMat = new THREE.MeshStandardMaterial({ color: '#b8362a', roughness: 0.6 });
 const casings = Array.from({ length: 32 }, () => { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.032, 6), brassMat); m.visible = false; scene.add(m); return { m, v: new THREE.Vector3(), t: 0, g: 0 }; });
 let caI = 0;
-function ejectCasing(x, y, z, rx, rz, shotgun) {
-  const c = casings[caI++ % casings.length]; c.m.material = shotgun ? shellMat : brassMat; c.m.scale.setScalar(shotgun ? 1.8 : 1);
+function ejectCasing(x, y, z, rx, rz, shotgun, mine = false) {
+  const c = casings[caI++ % casings.length]; c.mine = mine; c.m.material = shotgun ? shellMat : brassMat; c.m.scale.setScalar(shotgun ? 1.8 : 1);
   c.m.position.set(x, y, z); c.m.rotation.set(Math.random() * 3, Math.random() * 3, 0); c.m.visible = true; c.t = 1.4; c.g = Math.max(0, M.groundAt(x, z, y, 0.05) );
   c.v.set(rx * 2.2 + (Math.random() - 0.5), 1.6 + Math.random() * 0.8, rz * 2.2 + (Math.random() - 0.5));
 }
@@ -722,10 +724,11 @@ function audioInit() {
   if (AC) return; try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return; }
   master = AC.createGain(); master.gain.value = 0.9; master.connect(AC.destination);
   noiseBuf = AC.createBuffer(1, AC.sampleRate * 0.6, AC.sampleRate); const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-  for (const [n, k] of Object.entries(SFX_SETS)) { SFX[n] = []; for (let i = 0; i < k; i++) fetch(`assets/sfx/${n}${i}.m4a`).then((r) => r.arrayBuffer()).then((b) => AC.decodeAudioData(b)).then((buf) => { SFX[n][i] = buf; }).catch(() => {}); }
+  for (const [n, k] of Object.entries(SFX_SETS)) { SFX[n] = []; for (let i = 0; i < k; i++) fetch(`assets/sfx/${n}${i}.m4a?v=${BUILD}`).then((r) => r.arrayBuffer()).then((b) => AC.decodeAudioData(b)).then((buf) => { SFX[n][i] = buf; }).catch(() => {}); }
 }
 // play a sample; pos = [x,y,z] places it in the world (null = at the listener)
 function play(name, { pos = null, vol = 1, rate = 1, ref = 6, max = 90, delay = 0 } = {}) {
+  if (window.__sfxLog) window.__sfxLog.push(name + (pos ? '@' : '') + '|' + vol.toFixed(2));
   if (!AC) return null; const set = SFX[name], bufs = set && set.filter(Boolean); if (!bufs || !bufs.length) return null;
   const src = AC.createBufferSource(); src.buffer = bufs[(Math.random() * bufs.length) | 0]; src.playbackRate.value = rate * (0.94 + Math.random() * 0.12);
   const g = AC.createGain(); g.gain.value = vol;
@@ -757,6 +760,20 @@ function sndShot(wi, dist, pos) {
   const o = AC.createOscillator(), og = AC.createGain(); o.frequency.setValueAtTime(150 * w.pitch, t); o.frequency.exponentialRampToValueAtTime(40, t + 0.1);
   og.gain.setValueAtTime(vol * 0.9, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.12); o.connect(og).connect(master); o.start(t); o.stop(t + 0.13);
 }
+// objective alerts: short synthesized stingers; friendly events rise, enemy events fall
+function tones(seq, type = 'triangle', vol = 0.16) {
+  if (!AC) return; const t0 = AC.currentTime;
+  for (const [f, at, dur] of seq) { const o = AC.createOscillator(), g = AC.createGain(); o.type = type; o.frequency.value = f; g.gain.setValueAtTime(0.0001, t0 + at); g.gain.exponentialRampToValueAtTime(vol, t0 + at + 0.015); g.gain.exponentialRampToValueAtTime(0.0001, t0 + at + dur); o.connect(g).connect(master); o.start(t0 + at); o.stop(t0 + at + dur + 0.05); }
+}
+function stinger(ev, team) {
+  const mine = Client.team(Client.id), friendly = !team || !mine || team === mine;
+  if (ev === 'taken') friendly ? tones([[660, 0, 0.12], [880, 0.12, 0.18]]) : tones([[520, 0, 0.14], [390, 0.16, 0.14], [520, 0.32, 0.14], [390, 0.48, 0.3]], 'square', 0.1);
+  else if (ev === 'captured') friendly ? tones([[523, 0, 0.14], [659, 0.14, 0.14], [784, 0.28, 0.14], [1047, 0.42, 0.45]]) : tones([[440, 0, 0.2], [370, 0.2, 0.2], [294, 0.4, 0.5]], 'sawtooth', 0.09);
+  else if (ev === 'dropped') tones([[500, 0, 0.08], [400, 0.1, 0.16]], 'square', 0.08);
+  else if (ev === 'returned') friendly ? tones([[784, 0, 0.1], [988, 0.1, 0.25]]) : tones([[494, 0, 0.1], [392, 0.1, 0.25]]);
+  else if (ev === 'round' || ev === 'over') friendly ? tones([[523, 0, 0.15], [659, 0.15, 0.15], [784, 0.3, 0.15], [1047, 0.45, 0.6]], 'triangle', 0.18) : tones([[392, 0, 0.25], [349, 0.25, 0.25], [294, 0.5, 0.7]], 'sawtooth', 0.1);
+  else if (ev === 'go') tones([[440, 0, 0.1], [440, 0.15, 0.1], [660, 0.3, 0.3]]);
+}
 function sndBeep(f, dur = 0.06, vol = 0.12, type = 'square') {
   if (!AC) return; const t = AC.currentTime, o = AC.createOscillator(), g = AC.createGain(); o.type = type; o.frequency.value = f;
   g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur); o.connect(g).connect(master); o.start(t); o.stop(t + dur);
@@ -781,7 +798,7 @@ const Client = {
       case 'glass': { const e = this.ents.get(m.id); breakPane(m.id, e ? e.x : undefined, e ? e.z : undefined); break; }
       case 'hurt': $('#dmg').style.opacity = 1; setTimeout(() => { $('#dmg').style.opacity = 0; }, 90); sndBeep(90, 0.12, 0.2, 'sawtooth'); break;
       case 'kill': this.onKill(m); break;
-      case 'msg': announce(m.text, m.team); break;
+      case 'msg': announce(m.text, m.team); if (m.ev) stinger(m.ev, m.team); break;
     }
   },
   team(id) { const r = this.roster.get(id); return r ? r.team : 0; },
@@ -840,7 +857,11 @@ function localSpawn(m) {
   if (TEST && Q.get('pos')) { const [x, y, z, yaw, pitch] = Q.get('pos').split(',').map(Number); Object.assign(me, { x, y, z, yaw: yaw || 0, pitch: pitch || 0 }); }
   $('#dead').style.display = 'none';
 }
-function localDie() { me.alive = false; me.deadT = 0; me.reload = 0; mouseL = false; sndBeep(60, 0.4, 0.25, 'sawtooth'); }
+function localDie() { me.alive = false; me.deadT = 0; me.reload = 0; mouseL = false; me.spec = 0; sndBeep(60, 0.4, 0.25, 'sawtooth'); }
+// spectating (infiltration, while waiting for the next round): living teammates first, then anyone; click to cycle
+function specList() { const mine = Client.team(Client.id), l = [...Client.ents.values()].filter((e) => e.alive); l.sort((a, b) => (Client.team(b.id) === mine) - (Client.team(a.id) === mine) || a.id - b.id); return l; }
+function specTarget() { const l = specList(); if (!l.length) return null; let e = l.find((x) => x.id === me.spec); if (!e) { e = l[0]; me.spec = e.id; } return e; }
+function specNext(dir) { const l = specList(); if (!l.length) return; const i = Math.max(0, l.findIndex((x) => x.id === me.spec)); me.spec = l[(i + dir + l.length) % l.length].id; sndBeep(700, 0.03, 0.05); }
 function setWeapon(i, force) { if (i === me.w && !force) return; me.w = i; me.reload = 0; me.draw = 0.3; buildViewModel(i); }
 
 /* ---------- local movement ---------- */
@@ -874,7 +895,7 @@ function updateMe(dt) {
   // footsteps by surface and pace; a heavy double step when landing from a fall
   if (me.alive) {
     const hs2 = Math.hypot(me.vx, me.vz);
-    if (me.onGround && !onLad && hs2 > 0.6) { me.stride += hs2 * dt; if (me.stride >= (me.cr ? 0.9 : 1.3)) { me.stride = 0; footstep(me.x, me.y, me.z, me.cr ? 0.22 : K.shift ? 0.4 : 0.7, null); } }
+    if (me.onGround && !onLad && hs2 > 0.6) { me.stride += hs2 * dt; if (me.stride >= (me.cr ? 0.9 : 1.3)) { me.stride = 0; if (!(K.shift && !me.cr)) footstep(me.x, me.y, me.z, me.cr ? 0.25 : 0.9, null); } } // Shift walks silently
     if (me.onGround && !me.wasGround && me.fallV < -3) { footstep(me.x, me.y, me.z, 0.9, null); play('click', { vol: 0.15, rate: 0.6, delay: 0.06 }); }
     if (!me.onGround) me.fallV = me.vy; me.wasGround = me.onGround;
   }
@@ -888,10 +909,15 @@ function updateMe(dt) {
   if (me.alive) { camera.position.set(me.x + lx, me.y + me.eye, me.z + lz); camera.rotation.set(me.pitch + (Math.random() - 0.5) * shake * 0.12, me.yaw + (Math.random() - 0.5) * shake * 0.12, -me.lean * 0.16 + (Math.random() - 0.5) * shake * 0.08); }
   else {
     me.deadT += dt; me.respawnIn = Math.max(0, me.respawnIn - dt);
-    if (Client.mode === 'inf') { const k = Math.min(1, me.deadT / 1.2); camera.position.set(me.x, me.y + 1 + k * 26, me.z + 0.01); camera.rotation.set(-0.2 - k * 1.3, me.yaw, 0); }
+    if (Client.mode === 'inf' && me.deadT > 1.2 && specTarget()) { // spectate a living player from behind their shoulder
+      const e = specTarget(), ey = e.y + (e.cr ? 1.05 : 1.62), fx = -Math.sin(e.yaw) * Math.cos(e.pitch), fy = Math.sin(e.pitch), fz = -Math.cos(e.yaw) * Math.cos(e.pitch);
+      const back = Math.max(0.4, Math.min(2.6, M.rayMap(e.x, ey, e.z, -fx, -fy, -fz, 2.6, true) - 0.3));
+      camera.position.set(e.x - fx * back, ey - fy * back + 0.35, e.z - fz * back); camera.rotation.set(e.pitch, e.yaw, 0);
+    }
+    else if (Client.mode === 'inf') { const k = Math.min(1, me.deadT / 1.2); camera.position.set(me.x, me.y + 1 + k * 26, me.z + 0.01); camera.rotation.set(-0.2 - k * 1.3, me.yaw, 0); }
     else { camera.position.set(me.x, me.y + Math.max(0.35, 1.5 - me.deadT * 3), me.z); camera.rotation.set(me.pitch * 0.5, me.yaw, Math.min(0.6, me.deadT * 2)); }
     const d = $('#dead'); d.style.display = 'block';
-    d.innerHTML = (me.killer ? `Killed by <b>${esc(me.killer)}</b><br>` : '') + (Client.mode === 'inf' ? 'Spectating — you deploy next round' : `Respawning in ${Math.ceil(me.respawnIn)}`);
+    d.innerHTML = (me.killer ? `Killed by <b>${esc(me.killer)}</b><br>` : '') + (Client.mode === 'inf' ? (specTarget() ? `Spectating <b>${esc(Client.name(specTarget().id))}</b> — click to switch · you deploy next round` : 'You deploy next round') : `Respawning in ${Math.ceil(me.respawnIn)}`);
   }
   // aim / zoom
   const w = WPN[me.w]; me.ads += ((act && mouseR ? 1 : 0) - me.ads) * Math.min(1, dt * 14);
@@ -948,7 +974,7 @@ function fire(w) {
     if (hitE) { const h = hits.get(hitE.id) || { n: 0, hs: false }; h.n++; h.hs = h.hs || hs; hits.set(hitE.id, h); if (i === 0) play('hit_flesh', { pos: [ex, ey, ez], vol: 0.6, ref: 4, max: 40 }); }
     else if (i === 0 || w.pellets) impact(ex, ey, ez, hi, i === 0 ? 0.5 : 0.15);
   }
-  ejectCasing(camera.position.x + _r.x * 0.22 + _f.x * 0.3, camera.position.y - 0.08, camera.position.z + _r.z * 0.22 + _f.z * 0.3, _r.x, _r.z, !!w.pellets);
+  ejectCasing(camera.position.x + _r.x * 0.22 + _f.x * 0.3, camera.position.y - 0.08, camera.position.z + _r.z * 0.22 + _f.z * 0.3, _r.x, _r.z, !!w.pellets, true);
   toHost({ t: 'fire', w: me.w, es });
   for (const [id, h] of hits) toHost({ t: 'hit', id, n: h.n, hs: h.hs ? 1 : 0, w: me.w, o: [r2(o[0]), r2(o[1]), r2(o[2])] });
   if (hits.size) { const hm = $('#hit'); hm.style.transition = 'none'; hm.style.opacity = 1; hm.classList.toggle('hs', [...hits.values()].some((h) => h.hs)); requestAnimationFrame(() => { hm.style.transition = ''; hm.style.opacity = 0; }); sndBeep(1900, 0.04, 0.1); }
@@ -966,6 +992,7 @@ function updateEnts(dt) {
     e.x += (e.tx - e.x) * k; e.y += (e.ty - e.y) * k; e.z += (e.tz - e.z) * k;
     let da = e.tyaw - e.yaw; da = Math.atan2(Math.sin(da), Math.cos(da)); e.yaw += da * k;
     const m = e.mesh, u = m.userData; m.visible = e.alive;
+    if (e.tag) e.tag.visible = !(me.alive === false && Client.mode === 'inf' && me.spec === e.id);
     if (!e.alive) continue;
     m.position.set(e.x, e.y, e.z); m.rotation.y = e.yaw;
     const spd = Math.hypot(e.x - px, e.z - pz) / Math.max(dt, 0.001); e.spd += (spd - e.spd) * Math.min(1, dt * 8);
@@ -994,7 +1021,7 @@ function updateEnts(dt) {
 function updateFx(dt) {
   updateNades(dt);
   for (const s of sparks) if (s.m.visible) { s.t -= dt; s.v.y -= 12 * dt; s.m.position.addScaledVector(s.v, dt); _n.copy(s.m.position).add(s.v); s.m.lookAt(_n); if (s.t <= 0) s.m.visible = false; }
-  for (const c of casings) if (c.m.visible) { c.t -= dt; c.v.y -= 14 * dt; c.m.position.addScaledVector(c.v, dt); c.m.rotation.x += dt * 14; if (c.m.position.y < c.g + 0.01) { c.m.position.y = c.g + 0.01; if (c.v.y < -0.8) { c.v.y *= -0.35; c.v.x *= 0.6; c.v.z *= 0.6; play('click', { pos: [c.m.position.x, c.m.position.y, c.m.position.z], vol: 0.08, rate: 2.2, ref: 2, max: 12 }); } else { c.v.set(0, 0, 0); } } if (c.t <= 0) c.m.visible = false; }
+  for (const c of casings) if (c.m.visible) { c.t -= dt; c.v.y -= 14 * dt; c.m.position.addScaledVector(c.v, dt); c.m.rotation.x += dt * 14; if (c.m.position.y < c.g + 0.01) { c.m.position.y = c.g + 0.01; if (c.v.y < -0.8) { c.v.y *= -0.35; c.v.x *= 0.6; c.v.z *= 0.6; if (c.mine && Math.random() < 0.5) play('click', { pos: [c.m.position.x, c.m.position.y, c.m.position.z], vol: 0.08, rate: 2.2, ref: 2, max: 12 }); } else { c.v.set(0, 0, 0); } } if (c.t <= 0) c.m.visible = false; }
   for (const b of booms) if (b.m.visible) { b.t += dt * 3.2; const s = 1.2 + b.t * 5; b.m.scale.set(s, s, 1); b.m.material.opacity = Math.max(0, 1.4 * (1 - b.t)); if (b.t >= 1) b.m.visible = false; }
   for (const s of smokes) if (s.m.visible) { s.t += dt * 0.55; if (s.t < 0) continue; s.v.y = Math.max(0.4, s.v.y - dt * 1.5); s.v.x *= 0.98; s.v.z *= 0.98; s.m.position.addScaledVector(s.v, dt); const sc = 1 + s.t * 5; s.m.scale.set(sc, sc, 1); s.m.material.opacity = Math.max(0, 0.75 * (1 - s.t)); if (s.t >= 1) s.m.visible = false; }
   boomLight.intensity *= Math.exp(-dt * 7);
@@ -1004,8 +1031,57 @@ function updateFx(dt) {
 
 /* ---------- HUD ---------- */
 const fmtTime = (s) => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+/* ---------- minimap: the level from above, teammates, bases, flags / case and where to take them ---------- */
+const mini = $('#mini'), mctx = mini.getContext('2d'), miniBg = document.createElement('canvas'); miniBg.width = miniBg.height = 200;
+let miniScale = 1;
+function buildMiniBg() {
+  const { MW, MH, CS, floors, cellsRO } = M, c = miniBg.getContext('2d'); c.clearRect(0, 0, 200, 200);
+  miniScale = 184 / Math.max(MW * CS, MH * CS);
+  for (let cz = 0; cz < MH; cz++) for (let cx = 0; cx < MW; cx++) {
+    const fs = floors[cz * MW + cx], ci = cz * MW + cx, wall = cellsRO[ci].s.some((s) => !s.ghost && !s.rail && s.y0 <= 0.01 && s.y1 >= M.H - 0.01), glass = cellsRO[ci].s.some((s) => s.ghost);
+    let col;
+    if (wall && (!fs.length || fs[0] > 0.5)) col = fs.length ? `rgba(120,130,140,${0.5 + Math.min(0.45, fs[fs.length - 1] / 14)})` : 'rgba(60,66,74,0.95)';
+    else if (glass) col = 'rgba(110,170,210,0.8)';
+    else { const top = fs.length ? fs[fs.length - 1] : 0; col = top > 0.5 ? `rgba(150,160,170,${0.28 + Math.min(0.5, top / 12)})` : 'rgba(255,255,255,0.08)'; }
+    c.fillStyle = col; c.fillRect(100 + (M.cellX(cx) - CS / 2) * miniScale, 100 + (M.cellZ(cz) - CS / 2) * miniScale, CS * miniScale + 0.4, CS * miniScale + 0.4);
+  }
+}
+const mx = (x) => 100 + x * miniScale, mz = (z) => 100 + z * miniScale;
+function drawMini() {
+  const c = mctx, C = Client, now = performance.now() / 1000, myTeam = C.team(C.id);
+  c.clearRect(0, 0, 200, 200); c.drawImage(miniBg, 0, 0);
+  const ring = (x, z, r, col, w = 2, dash) => { c.save(); if (dash) c.setLineDash([3, 3]); c.strokeStyle = col; c.lineWidth = w; c.beginPath(); c.arc(mx(x), mz(z), r, 0, 6.283); c.stroke(); c.restore(); };
+  const flagIcon = (x, z, col) => { const X = mx(x), Z = mz(z); c.fillStyle = col; c.fillRect(X - 1, Z - 8, 2, 10); c.beginPath(); c.moveTo(X + 1, Z - 8); c.lineTo(X + 8, Z - 5.5); c.lineTo(X + 1, Z - 3); c.closePath(); c.fill(); };
+  const caseIcon = (x, z, col) => { const X = mx(x), Z = mz(z); c.fillStyle = col; c.fillRect(X - 5, Z - 3.5, 10, 7); c.fillStyle = '#f0a83a'; c.fillRect(X - 5, Z - 0.5, 10, 1.5); };
+  let goal = null; // where to bring what I carry
+  if (C.mode !== 'dm') {
+    const isInf = C.mode === 'inf';
+    ring(M.BASE[1].x, M.BASE[1].z, 7, TEAM_COL[1], 1.5); ring(M.BASE[2].x, M.BASE[2].z, 7, isInf ? '#6fdc6a' : TEAM_COL[2], 1.5);
+    for (const f of C.flags) {
+      const [s, x, y, z, carrier, team, isCase] = f, col = TEAM_COL[team];
+      if (s === 1 && carrier === C.id) { goal = isInf ? M.BASE[2] : M.BASE[myTeam]; continue; }
+      if (isCase) caseIcon(x, z, '#e8e4dc'); else flagIcon(x, z, col);
+      if (s === 1) ring(x, z, 6, '#fff', 1.2); else if (s === 2) ring(x, z, 6, col, 1.2, true);
+    }
+    if (isInf && myTeam === 2 && !goal) { /* attackers always see the extraction point */ }
+  }
+  for (const e of C.ents.values()) { // teammates
+    if (!e.alive || !myTeam || C.team(e.id) !== myTeam) continue;
+    c.fillStyle = TEAM_COL[myTeam]; c.beginPath(); c.arc(mx(e.x), mz(e.z), 2.6, 0, 6.283); c.fill();
+  }
+  if (goal) { // pulsing target ring and a guide line from me
+    const r = 9 + Math.sin(now * 6) * 3, col = C.mode === 'inf' ? '#6fdc6a' : TEAM_COL[myTeam];
+    ring(goal.x, goal.z, r, col, 2.5); c.save(); c.setLineDash([4, 4]); c.strokeStyle = col; c.lineWidth = 1.2; c.beginPath(); c.moveTo(mx(me.x), mz(me.z)); c.lineTo(mx(goal.x), mz(goal.z)); c.stroke(); c.restore();
+    c.fillStyle = col; c.font = '600 10px sans-serif'; c.textAlign = 'center'; c.fillText(C.mode === 'inf' ? 'EXTRACT' : 'RETURN', mx(goal.x), mz(goal.z) - 13);
+  }
+  if (me.alive) { // me: arrow pointing where I look
+    const X = mx(me.x), Z = mz(me.z), fx = -Math.sin(me.yaw), fz = -Math.cos(me.yaw);
+    c.fillStyle = '#fff'; c.beginPath(); c.moveTo(X + fx * 7, Z + fz * 7); c.lineTo(X - fx * 4 + fz * 4.5, Z - fz * 4 - fx * 4.5); c.lineTo(X - fx * 4 - fz * 4.5, Z - fz * 4 + fx * 4.5); c.closePath(); c.fill();
+  }
+}
 let hudAcc = 0;
 function updateHud(dt) {
+  drawMini();
   hudAcc += dt; if (hudAcc < 0.1) return; hudAcc = 0;
   const C = Client, w = WPN[me.w];
   $('#hp').firstChild.textContent = me.alive ? me.hp : 0; $('#hpbar i').style.width = (me.alive ? me.hp : 0) + '%'; $('#hpbar i').style.background = me.hp > 35 ? 'var(--green)' : 'var(--red)';
@@ -1039,13 +1115,13 @@ document.addEventListener('mousemove', (e) => {
   const k = 0.0022 * sens * (camera.fov / 74);
   me.yaw -= e.movementX * k; me.pitch = clamp(me.pitch - e.movementY * k, -1.5, 1.5);
 });
-canvas.addEventListener('mousedown', (e) => { if (!locked()) return; if (e.button === 0) mouseL = true; if (e.button === 2) mouseR = true; });
+canvas.addEventListener('mousedown', (e) => { if (AC && AC.state === 'suspended') AC.resume(); if (!locked()) return; if (!me.alive && Client.mode === 'inf') { specNext(e.button === 2 ? -1 : 1); return; } if (e.button === 0) mouseL = true; if (e.button === 2) mouseR = true; });
 window.addEventListener('mouseup', (e) => { if (e.button === 0) mouseL = false; if (e.button === 2) mouseR = false; });
 window.addEventListener('contextmenu', (e) => { if (inGame) e.preventDefault(); });
 window.addEventListener('wheel', (e) => { if (locked() && me.alive) setWeapon((me.w + (e.deltaY > 0 ? 1 : WPN.length - 1)) % WPN.length); });
 window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT') return;
-  const k = e.key.toLowerCase(); K[k] = true;
+  const k = e.key.toLowerCase(); K[k] = true; if (AC && AC.state === 'suspended') AC.resume();
   if (!inGame) return;
   if (k === 'tab' || k === ' ') e.preventDefault();
   if (!locked() || !me.alive) return;
@@ -1103,7 +1179,7 @@ $('#copyBtn').addEventListener('click', () => {
 
 if (Q.has('low')) { $('#gfx').value = 'low'; $('#gfx').dispatchEvent(new Event('change')); }
 // ?test[&mode=ctf&bots=4&pos=x,y,z,yaw,pitch] — offline practice match (no matchmaking), also used for screenshots
-if (TEST) { Net.isHost = true; Net.code = 'TEST0'; Host.start(Q.get('mode') || 'dm', +(Q.get('bots') ?? 4), 'Tester', Q.get('map')); }
+if (TEST) { audioInit(); Net.isHost = true; Net.code = 'TEST0'; Host.start(Q.get('mode') || 'dm', +(Q.get('bots') ?? 4), 'Tester', Q.get('map')); }
 else loadMap(MAPS[0].id);
 
 /* ---------- main loop ---------- */
@@ -1122,4 +1198,4 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-window.__g = { Host, Client, Net, me, toHost, get M() { return M; }, WPN, loadMap };
+window.__g = { Host, Client, Net, me, toHost, get M() { return M; }, WPN, loadMap, camera };

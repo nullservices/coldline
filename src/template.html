@@ -65,6 +65,7 @@
   #hp small{font-size:13px;color:var(--dim);letter-spacing:.1em;margin-left:6px}
   #hpbar{width:180px;height:5px;background:rgba(255,255,255,.18);margin-top:6px}#hpbar i{display:block;height:100%;background:var(--green)}
   #br{position:absolute;right:18px;bottom:16px;text-align:right}
+  #mini{position:absolute;right:12px;top:12px;width:200px;height:200px;background:rgba(8,10,12,.55);border:1px solid var(--line);border-radius:6px}
   #ammo{font-size:44px;font-weight:700;line-height:1}#ammo small{font-size:20px;color:var(--dim)}
   #wname{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-top:4px}
   #wlist{font-size:12px;color:var(--dim);margin-top:4px;letter-spacing:.06em}#wlist b{color:var(--amber)}
@@ -87,6 +88,7 @@
 <canvas id="c"></canvas>
 
 <div id="hud">
+  <canvas id="mini" width="200" height="200"></canvas>
   <div id="codeChip">Invite code <b id="codeTxt"></b></div>
   <div id="top"><div id="score"></div><div id="sub"></div></div>
   <div id="obj"></div>
@@ -128,7 +130,7 @@
         <label for="code">Invite code</label>
         <input id="code" maxlength="5" placeholder="e.g. K7M2Q" autocomplete="off" style="text-transform:uppercase;letter-spacing:.3em">
         <div class="row"><button class="pri" id="joinBtn">Join</button></div>
-        <div class="keys"><b>WASD</b> move · <b>Space</b> jump · <b>C</b> crouch · <b>Shift</b> walk<br>
+        <div class="keys"><b>WASD</b> move · <b>Space</b> jump · <b>C</b> crouch · <b>Shift</b> walk silently<br>
           <b>Q / E</b> lean · <b>Mouse</b> fire · <b>Right mouse</b> aim / scope<br>
           <b>1–5</b> or wheel weapons · <b>R</b> reload · <b>G</b> grenade · <b>Tab</b> scores · <b>Esc</b> menu</div>
       </div>

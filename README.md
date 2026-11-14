@@ -69,8 +69,15 @@ exposure and skyline (`city` / `hills`). Register it in `src/maps/index.js` and 
   and deals up to 115 damage within 7.5 m with line-of-sight falloff. Every peer runs the same
   fixed-step physics from the throw, so the blast lands in the same spot for everyone. Bots lob
   them too.
-- Footsteps follow the surface you are on (concrete, wood, carpet, grass, snow, metal grating) and
-  your pace; other players' steps, shots, impacts and explosions are positioned in 3D audio.
+- Footsteps follow the surface you are on (concrete, wood, carpet, grass, snow, metal grating):
+  running is loud, crouching is quiet, **holding Shift walks silently**. Other players' steps, shots,
+  impacts and explosions are positioned in 3D audio.
+- A minimap (top right) shows the level, you and your teammates, both bases, the flags or the case
+  and whoever carries them, and highlights where to bring it once you hold it. Objective events
+  (flag taken / dropped / returned / captured, case picked up, round won or lost) have alert
+  stingers that rise for your team and fall for the enemy's.
+- In Infiltration, dead players spectate the living (teammates first) from behind the shoulder
+  until the next round; click to switch players.
 
 ## Hit detection
 
