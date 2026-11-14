@@ -59,6 +59,19 @@ exposure and skyline (`city` / `hills`). Register it in `src/maps/index.js` and 
 | `w` / `a` | window (sill 1.0, header 2.2) / doorway header | `o` / `*` | pillar / ceiling lamp |
 | `S` `D` `F` | team spawn · DM spawn · flag (team by map half) | `1` `2` `G` | red / blue spawn and blue flag for asymmetric maps (`sym: 'none'`, full layout instead of a mirrored half) |
 
+## Weapons, grenades, sound
+
+- Five weapons built from primitives per class (railed carbine, SMG with folding stock, pump
+  shotgun, scoped bolt rifle, pistol) — the same model is in your hands and in everyone else's.
+- Hitscan shots with visible tracers, bullet-hole decals on the face that was hit, dust / wood
+  chips / metal sparks by material, ejected casings, reload and dry-fire animation and sounds.
+- **G throws a frag grenade** (3 per life): it bounces off walls and floors, fuses after 3.2 s,
+  and deals up to 115 damage within 7.5 m with line-of-sight falloff. Every peer runs the same
+  fixed-step physics from the throw, so the blast lands in the same spot for everyone. Bots lob
+  them too.
+- Footsteps follow the surface you are on (concrete, wood, carpet, grass, snow, metal grating) and
+  your pace; other players' steps, shots, impacts and explosions are positioned in 3D audio.
+
 ## Hit detection
 
 Shots and bot line-of-sight use an exact ray cast through the level solids (`rayMap` in
@@ -73,4 +86,9 @@ from the shooter's eye before applying damage, and bots drop a target they can n
 - `assets/models/soldier.glb` is the Mixamo "Vanguard" character with Idle/Walk/Run clips, as
   shipped in the three.js examples. Aim pitch and crouch are layered on top of the clips at
   runtime.
-- Everything else (weapons, railings, ladders, lamps, skyline) is built from primitives in code.
+- Sounds in `assets/sfx/` (AAC, so every browser decodes them) are CC0: gunshots from
+  [The Free Firearm Sound Library](https://opengameart.org/content/the-free-firearm-sound-library)
+  (AR-15, PPSh, Mossberg, Tikka and Walther PPQ recordings), footsteps, impacts and clicks from
+  [Kenney's Impact Sounds](https://kenney.nl/assets/impact-sounds), explosions from
+  [Kenney's Sci-Fi Sounds](https://kenney.nl/assets/sci-fi-sounds).
+- Everything else (weapons, grenades, railings, ladders, lamps, skyline) is built from primitives in code.

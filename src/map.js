@@ -64,7 +64,7 @@ export function compile(def) {
 
   function solid(cx, cz, x0, x1, z0, z1, y0, y1, kind, render = true, extra) {
     const X = cellX(cx) - CS / 2, Z = cellZ(cz) - CS / 2;
-    at(cx, cz).s.push({ x0: X + x0, x1: X + x1, z0: Z + z0, z1: Z + z1, y0, y1, ...extra });
+    at(cx, cz).s.push({ x0: X + x0, x1: X + x1, z0: Z + z0, z1: Z + z1, y0, y1, kind, ...extra });
     if (render) boxes.push({ x: X + (x0 + x1) / 2, y: (y0 + y1) / 2, z: Z + (z0 + z1) / 2, sx: x1 - x0, sy: y1 - y0, sz: z1 - z0, kind });
   }
   const deco = (cx, cz, x0, x1, z0, z1, y0, y1, kind) => { const X = cellX(cx) - CS / 2, Z = cellZ(cz) - CS / 2; boxes.push({ x: X + (x0 + x1) / 2, y: (y0 + y1) / 2, z: Z + (z0 + z1) / 2, sx: x1 - x0, sy: y1 - y0, sz: z1 - z0, kind }); };
@@ -79,7 +79,7 @@ export function compile(def) {
       if (k > 0 && (ch !== 'L' || chr(k - 1, cx, cz) !== 'L') && !FULL[chr(k - 1, cx, cz)]) solid(cx, cz, 0, CS, 0, CS, y0 - SLAB, y0, ch === 'r' ? KIND.r : ch === 'R' || ch === 'l' ? KIND.R : KIND['=']);
       const m = CS * 0.5;
       if (ch === 'g') { // curtain wall: a thin pane with a spandrel band above and a sill below; blocks movement but not sight or shots
-        c.s.push({ x0: cellX(cx) - CS / 2, x1: cellX(cx) + CS / 2, z0: cellZ(cz) - CS / 2, z1: cellZ(cz) + CS / 2, y0, y1: y0 + H, ghost: true });
+        c.s.push({ x0: cellX(cx) - CS / 2, x1: cellX(cx) + CS / 2, z0: cellZ(cz) - CS / 2, z1: cellZ(cz) + CS / 2, y0, y1: y0 + H, ghost: true, kind: 'glass' });
         const alongX = WALLISH(chr(k, cx - 1, cz)) || WALLISH(chr(k, cx + 1, cz)), t = 0.06;
         const pane = (a, b, y1, y2, kind) => alongX ? deco(cx, cz, 0, CS, m - a, m + b, y1, y2, kind) : deco(cx, cz, m - a, m + b, 0, CS, y1, y2, kind);
         pane(t, t, y0 + 0.1, y0 + H - 0.35, 'glass'); pane(0.2, 0.2, y0 + H - 0.35, y0 + H, KIND['#']); pane(0.15, 0.15, y0, y0 + 0.1, 'metal');
@@ -172,6 +172,16 @@ export function compile(def) {
     let m = 1e9; for (const [dx, dz] of [[-r, -r], [r, -r], [-r, r], [r, r]]) m = Math.min(m, ceilAt(x + dx, z + dz, feet, step)); return m;
   }
   const ladderAt = (x, z) => { const c = cellAt(x, z); return c ? c.ladder : null; };
+  // material kind of the surface a body of radius r stands on ('ground' for the ground plane)
+  function groundKindAt(x, z, feet, r, step = STEP) {
+    let g = -1, kind = 'ground'; const lim = feet + step;
+    for (const [dx, dz] of [[-r, -r], [r, -r], [-r, r], [r, r]]) {
+      const px = x + dx, pz = z + dz, c = cellAt(px, pz); if (!c) continue;
+      for (const s of c.s) if (!s.ghost && !s.rail && s.y1 <= lim && s.y1 > g && px >= s.x0 && px < s.x1 && pz >= s.z0 && pz < s.z1) { g = s.y1; kind = s.kind || 'concrete'; }
+      if (c.stair) { const h = stairH(c, px, pz); if (h <= lim && h > g) { g = h; kind = KIND.step; } }
+    }
+    return g > 0.01 ? kind : 'ground';
+  }
 
   /* ---------- exact ray cast ----------
      Walks the cell grid along the ray and intersects every solid box and stair ramp
@@ -183,10 +193,13 @@ export function compile(def) {
     for (let i = 0; i < 3; i++) {
       if (Math.abs(d[i]) < 1e-9) { if (o[i] < ax[i] || o[i] >= bx[i]) return Infinity; continue; }
       let a = (ax[i] - o[i]) / d[i], b = (bx[i] - o[i]) / d[i]; if (a > b) [a, b] = [b, a];
-      if (a > t0) t0 = a; if (b < t1) t1 = b; if (t0 > t1) return Infinity;
+      if (a > t0) { t0 = a; _axis = i; } if (b < t1) t1 = b; if (t0 > t1) return Infinity;
     }
     return t1 < 0 ? Infinity : Math.max(0, t0);
   }
+  let _axis = 0;
+  const hit = { kind: 'concrete', nx: 0, ny: 1, nz: 0 }; // what the last rayMap() hit (material kind + face normal)
+  const hitInfo = () => hit;
   function rayStair(c, cx, cz, ox, oy, oz, dx, dy, dz, ta, tb) {
     const st = c.stair, [sdx, sdz] = DIRS[st.dir], X0 = cellX(cx) - CS / 2, Z0 = cellZ(cz) - CS / 2;
     const yl = st.y0 - SLAB, yh = st.y0 + H;
@@ -208,7 +221,8 @@ export function compile(def) {
   }
   function rayMap(ox, oy, oz, dx, dy, dz, max) {
     let best = max;
-    if (dy < 0) { const t = -oy / dy; if (t < best) best = t; } // ground plane
+    hit.kind = 'none'; hit.nx = 0; hit.ny = 1; hit.nz = 0;
+    if (dy < 0) { const t = -oy / dy; if (t < best) { best = t; hit.kind = 'ground'; } } // ground plane
     let cx = toCx(ox), cz = toCz(oz);
     const sx = dx > 0 ? 1 : dx < 0 ? -1 : 0, sz = dz > 0 ? 1 : dz < 0 ? -1 : 0;
     let tx = sx ? ((cx + (sx > 0 ? 1 : 0) - MW / 2) * CS - ox) / dx : Infinity, tz = sz ? ((cz + (sz > 0 ? 1 : 0) - MH / 2) * CS - oz) / dz : Infinity;
@@ -218,12 +232,15 @@ export function compile(def) {
       const t1 = Math.min(tx, tz, best);
       if (cx < 0 || cz < 0 || cx >= MW || cz >= MH) { // outside the grid: solid below the map top
         const ya = oy + dy * t0;
-        if (ya < MAXY) { if (t0 < best) best = t0; }
-        else if (dy < 0) { const t = (MAXY - oy) / dy; if (t < t1 && t < best) best = t; }
+        if (ya < MAXY) { if (t0 < best) { best = t0; hit.kind = 'concrete'; hit.nx = -Math.sign(dx); hit.ny = 0; hit.nz = 0; } }
+        else if (dy < 0) { const t = (MAXY - oy) / dy; if (t < t1 && t < best) { best = t; hit.kind = 'concrete'; } }
       } else {
         const c = cells[cz * MW + cx];
-        for (const s of c.s) { if (s.ghost || s.rail) continue; const t = rayBox(s, ox, oy, oz, dx, dy, dz); if (t < best && t <= t1 + 1e-6) best = t; }
-        if (c.stair) { const t = rayStair(c, cx, cz, ox, oy, oz, dx, dy, dz, t0, t1); if (t < best) best = t; }
+        for (const s of c.s) {
+          if (s.ghost || s.rail) continue; const t = rayBox(s, ox, oy, oz, dx, dy, dz);
+          if (t < best && t <= t1 + 1e-6) { best = t; hit.kind = s.kind || 'concrete'; hit.nx = _axis === 0 ? -Math.sign(dx) : 0; hit.ny = _axis === 1 ? -Math.sign(dy) : 0; hit.nz = _axis === 2 ? -Math.sign(dz) : 0; }
+        }
+        if (c.stair) { const t = rayStair(c, cx, cz, ox, oy, oz, dx, dy, dz, t0, t1); if (t < best) { best = t; hit.kind = KIND.step; hit.nx = 0; hit.ny = 1; hit.nz = 0; } }
       }
       if (t1 >= best) break;
       if (tx < tz) { cx += sx; tx += ddx; } else { cz += sz; tz += ddz; }
@@ -361,6 +378,6 @@ export function compile(def) {
   return {
     id: def.id, name: def.name, desc: def.desc, theme: def.theme || {}, LAYERS, MW, MH, MAXY, CS, H, SLAB, STEP, RAIL_H, NODE,
     cellX, cellZ, toCx, toCz, SPAWNS, BASE, boxes, ladders, lamps, stairH, solidAt, topAt, ceilAt, blockedAt, groundAt, ceilingAt, ladderAt,
-    rayMap, los, floors, stairIdx, nodeCount, nodeAt, findPath, reachable, cellsRO: cells,
+    rayMap, los, hitInfo, groundKindAt, floors, stairIdx, nodeCount, nodeAt, findPath, reachable, cellsRO: cells,
   };
 }
